@@ -1,6 +1,6 @@
 --[[
 		* TAS - Recording Tool by chris1384 @2020
-		* version 1.4.4
+		* version 1.4.5
 ]]
 
 -- // the root of your problems
@@ -110,6 +110,7 @@ local tas = {
 		
 		keepWarpData = false, -- keep all warps whenever you're starting a new run, keep this as 'false' as loading warps from previous runs can have unexpected results, but can have undesired effects while gameplaying
 		saveWarpData = true, -- save warp data to .tas files
+		enableWarpCache = true, -- save warp data on sessions, in case of timed outs you can use the warps previously saved beforehand
 		
 		syncWarps = true,
 		--[[
@@ -399,12 +400,31 @@ function tas.init()
 	end
 	-- // << Until here 
 	
+	local cachedWarpsLoaded = false
+	
+	if tas.settings.enableWarpCache then
+		local cacheFile = ((fileExists("addons/warpcache.json") == true) and fileOpen("addons/warpcache.json")) or nil
+		if cacheFile then
+			local warpCache = fileRead(cacheFile, fileGetSize(cacheFile))
+			local warpCacheData = fromJSON(warpCache)
+			if warpCacheData and type(warpCacheData) == "table" then
+				tas.warps = warpCacheData
+				cachedWarpsLoaded = true
+			end
+			fileClose(cacheFile)
+		end
+	end
+	
 	if tas.settings.startPrompt then
-		tas.prompt("Recording Tool $$v1.4.4 ##by #FFAAFFchris1384 ##has started!", 255, 100, 100)
+		tas.prompt("Recording Tool $$v1.4.5 ##by #FFAAFFchris1384 ##has started!", 255, 100, 100)
 		tas.prompt("Type $$/tashelp ##for commands!", 255, 100, 100)
 		
 		if config_loaded then
 			tas.prompt("User settings have been loaded!", 255, 100, 255)
+		end
+		
+		if tas.settings.enableWarpCache and cachedWarpsLoaded then
+			tas.prompt("Warps cache has been loaded!", 60, 180, 255)
 		end
 	end
 	
@@ -601,6 +621,15 @@ function tas.commands(cmd, ...)
 		
 		if tas.settings.syncWarps then
 			triggerServerEvent("tas:syncWarps", localPlayer, "save", saveTable)
+		end
+		
+		if tas.settings.enableWarpCache then
+			if fileExists("addons/warpcache.json") then fileDelete("addons/warpcache.json") end
+			local cacheFile = fileCreate("addons/warpcache.json")
+			if cacheFile then
+				fileWrite(cacheFile, toJSON(tas.warps))
+				fileClose(cacheFile)
+			end
 		end
 		
 		tas.prompt("Warp $$#"..tostring(#tas.warps).." ##saved!", 60, 180, 255)

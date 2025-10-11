@@ -1,6 +1,6 @@
 --[[
 		* TAS - Recording Tool by chris1384 @2020
-		* version 1.4.4
+		* version 1.4.5
 ]]
 
 local tas = {
