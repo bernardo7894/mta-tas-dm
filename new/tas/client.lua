@@ -47,6 +47,10 @@ local tas = {
 	warps = {}, -- warps
 	entities = {}, -- [USED]
 	textures = {}, -- textures duuh
+	analysis = {
+		metadata = nil,
+		pending_collisions = {},
+	},
 	
 	-- // Settings incoming, these can be edited here directly or using the in-game command (/tascvar)
 	settings = 	{
@@ -223,6 +227,7 @@ tas.registered_commands = {
 	--previous_frame = "pf", -- [UNUSED]
 	load_record = "loadr",
 	save_record = "saver",
+	save_analysis = "savephysics",
 	resume = "resume",
 	seek = "seek",
 	debug = "debugr",
@@ -254,6 +259,20 @@ tas.key_mappings = {
 	-- num_6 = "special_control_left",
 }
 						
+-- Controls captured for physics analysis. These are stored in addition to the
+-- original TAS key list, so keyboard layout/remapping does not lose information.
+tas.analysis_controls = {
+	"accelerate",
+	"brake_reverse",
+	"vehicle_left",
+	"vehicle_right",
+	"handbrake",
+	"steer_forward",
+	"steer_back",
+	"vehicle_fire",
+	"vehicle_secondary_fire",
+}
+
 --[[ 
 	This part involves storing every function as local functions.
 	These can be helpful for speeding up the process of registering frames, play the run and loading or saving files.
@@ -268,6 +287,7 @@ local getGameSpeed = getGameSpeed
 
 local getPedOccupiedVehicle = getPedOccupiedVehicle
 local getVehicleController = getVehicleController
+local getVehicleHandling = getVehicleHandling
 local isVehicleWheelOnGround = isVehicleWheelOnGround
 local getVehicleNitroCount = getVehicleNitroCount
 local getVehicleNitroLevel = getVehicleNitroLevel
@@ -278,6 +298,7 @@ local setVehicleNitroActivated = setVehicleNitroActivated
 
 local getElementPosition = getElementPosition
 local getElementRotation = getElementRotation
+local getElementMatrix = getElementMatrix
 local getElementVelocity = getElementVelocity
 local getElementAngularVelocity = getElementAngularVelocity
 local getElementHealth = getElementHealth
@@ -291,6 +312,7 @@ local setElementModel = setElementModel
 
 local getKeyState = getKeyState
 local getPedControlState = getPedControlState
+local getPedAnalogControlState = getPedAnalogControlState
 local setPedControlState = setPedControlState
 local getAnalogControlState = getAnalogControlState
 local setAnalogControlState = setAnalogControlState
@@ -327,6 +349,17 @@ local string_find = string.find
 local string_sub = string.sub
 local string_gsub = string.gsub
 local string_format = string.format
+
+-- Convert a Lua table into one JSON object suitable for JSONL.
+function tas.json_object(value)
+	local encoded = toJSON(value, true)
+	if not encoded then return nil end
+	-- MTA's toJSON historically wraps a Lua table in a one-element JSON array.
+	if string_sub(encoded, 1, 1) == "[" and string_sub(encoded, -1) == "]" then
+		return string_sub(encoded, 2, -2)
+	end
+	return encoded
+end
 
 -- // Local Functions End
 
@@ -536,6 +569,19 @@ function tas.commands(cmd, ...)
 				tas.warps = {}
 				triggerServerEvent("tas:syncWarps", localPlayer, "clear")
 			end
+			
+			tas.analysis.pending_collisions = {}
+			tas.analysis.metadata = {
+				format = "mta-tas-dm-physics-jsonl",
+				formatVersion = 1,
+				recordedAtUtc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+				vehicleModel = getElementModel(vehicle),
+				fpsLimit = getFPSLimit(),
+				initialGameSpeed = getGameSpeed(),
+				dimension = getElementDimension(vehicle),
+				interior = getElementInterior(vehicle),
+				handling = getVehicleHandling(vehicle),
+			}
 			
 			tas.var.recording = true
 			tas.var.record_tick = getTickCount()
@@ -1031,6 +1077,79 @@ function tas.commands(cmd, ...)
 			tas.prompt("Your run has been saved ".. (tas.settings.usePrivateFolder == true and "$$privately ##" or "").."to $$'saves/"..args[1]..".tas'##!", 255, 255, 100)
 		end
 	
+	-- // Save Physics Analysis
+	elseif cmd == tas.registered_commands.save_analysis then
+	
+		if args[1] == nil then
+			tas.prompt("Physics export failed, please specify a $$name ##for your file!", 255, 100, 100)
+			tas.prompt("Example: $$/savephysics infernus_air_right", 255, 100, 100)
+			return
+		end
+		if #tas.data == 0 then tas.prompt("Physics export failed, no $$data ##recorded!", 255, 100, 100) return end
+		
+		local isPrivated = (tas.settings.usePrivateFolder == true and "@") or ""
+		local fileTarget = isPrivated .. "saves/" .. args[1] .. ".physics.jsonl"
+		
+		if tas.settings.useWarnings then
+			if fileExists(fileTarget) and not tas.timers.warnPhysicsSave then
+				tas.timers.warnPhysicsSave = setTimer(function() tas.timers.warnPhysicsSave = nil end, 5000, 1)
+				tas.prompt("Existing physics export $$'"..args[1]..".physics.jsonl' ##found! Use the command again to overwrite it.", 255, 100, 100)
+				return
+			end
+		end
+		
+		local save_file = fileCreate(fileTarget)
+		if not save_file then
+			tas.prompt("Physics export failed, could not create the output file.", 255, 100, 100)
+			return
+		end
+		
+		local metadata = {}
+		for k, v in pairs(tas.analysis.metadata or {}) do metadata[k] = v end
+		metadata.exportedAtUtc = os.date("!%Y-%m-%dT%H:%M:%SZ")
+		metadata.frameCount = #tas.data
+		metadata.author = string_gsub(getPlayerName(localPlayer), "#%x%x%x%x%x%x", "")
+		
+		local metadata_line = tas.json_object({type = "metadata", data = metadata})
+		if metadata_line then fileWrite(save_file, metadata_line .. "\n") end
+		
+		for i=1, #tas.data do
+			local run = tas.data[i]
+			local extra = run.x or {}
+			local frame = {
+				type = "frame",
+				frame = i,
+				tick = run.tick,
+				dt = extra.dt,
+				fps = extra.fps,
+				gameSpeed = extra.gameSpeed,
+				position = run.p,
+				rotationEuler = run.r,
+				matrix = extra.matrix,
+				velocity = run.v,
+				angularVelocity = run.rv,
+				health = run.h,
+				model = run.m,
+				nitro = run.n,
+				keys = run.k,
+				anyWheelOnGround = run.g,
+				wheelOnGround = extra.wheels,
+				effectiveControls = extra.controls,
+				analogControls = extra.analogControls,
+				tasAnalogSteering = run.a,
+				collisions = extra.collisions,
+				marked = run.marked,
+			}
+			
+			local line = tas.json_object(frame)
+			if line then fileWrite(save_file, line .. "\n") end
+		end
+		
+		fileClose(save_file)
+		tas.timers.warnPhysicsSave = nil
+		
+		tas.prompt("Physics telemetry saved ".. (tas.settings.usePrivateFolder == true and "$$privately ##" or "") .. "to $$'saves/"..args[1]..".physics.jsonl'##!", 255, 255, 100)
+	
 	-- // Load Recording
 	elseif cmd == tas.registered_commands.load_record then
 	
@@ -1392,6 +1511,7 @@ function tas.commands(cmd, ...)
 			"/"..tas.registered_commands.resume.." $$| ##/"..tas.registered_commands.seek.." $$- ##resume $$| ##seek from a frame",
 			tas.settings.rewindingKey:upper().." $$- ##rewind during recording $$| ##L-SHIFT $$- ##x2 $$| ##L-ALT $$- ##x0.5",
 			"/"..tas.registered_commands.save_record.." $$| ##/"..tas.registered_commands.load_record.." $$- ##save $$| ##load a TAS file",
+			"/"..tas.registered_commands.save_analysis.." [name] $$- ##export extended physics telemetry (JSONL)",
 			"/"..tas.registered_commands.autotas.." $$- ##toggle automatic record/playback",
 			"/"..tas.registered_commands.clear_all.." $$- ##clear all cached data",
 			"/"..tas.registered_commands.debug.." [0-3] $$- ##toggle debugging",
@@ -1406,7 +1526,7 @@ function tas.commands(cmd, ...)
 		
 		tas.prompt("")
 		tas.prompt("Commands List $$(page "..tostring(page_target).."/"..tostring(page_count)..")##:", 255, 100, 100)
-		for i=1+page_rows,5+page_rows do
+		for i=1+page_rows,math_min(5+page_rows, #all_commands) do
 			tas.prompt(all_commands[i], 255, 100, 100)
 		end
 		
@@ -1650,7 +1770,7 @@ function tas.render_record(deltaTime)
 			
 		end
 	
-		local tick, p, r, v, rv, health, model, nos, keys, ground, analog = tas.record_state(vehicle)
+		local tick, p, r, v, rv, health, model, nos, keys, ground, analog, analysis = tas.record_state(vehicle)
 		local marked = nil
 		
 		local gamespeed = (tas.settings.useGameSpeed == true and getGameSpeed()) or 1
@@ -1697,6 +1817,11 @@ function tas.render_record(deltaTime)
 			end
 		end
 		
+		analysis.dt = deltaTime
+		analysis.fps = (deltaTime > 0 and 1000 / deltaTime) or 0
+		analysis.collisions = tas.analysis.pending_collisions
+		tas.analysis.pending_collisions = {}
+		
 		table_insert(tas.data, 	{
 			tick = tick,
 			p = p,
@@ -1709,6 +1834,7 @@ function tas.render_record(deltaTime)
 			k = keys,
 			g = ground,
 			a = analog,
+			x = analysis, -- extended physics-analysis state; ignored by normal TAS playback
 			marked = marked,
 		})
 		
@@ -1740,6 +1866,7 @@ function tas.record_state(vehicle)
 		local r = {getElementRotation(vehicle)}
 		local v = {getElementVelocity(vehicle)}
 		local rv = {getElementAngularVelocity(vehicle)}
+		local matrix = getElementMatrix(vehicle, false)
 		
 		local health = getElementHealth(vehicle)
 		local model = getElementModel(vehicle)
@@ -1792,20 +1919,55 @@ function tas.record_state(vehicle)
 			end
 		end
 		
-		local ground = nil
-		if tas.settings.detectGround then
-			for i=0,3 do
-				if isVehicleWheelOnGround(vehicle, i) then
-					ground = true
-					break
-				end
-			end
+		-- Wheel order is front-left, rear-left, front-right, rear-right (MTA indices 0..3).
+		local wheels = {}
+		local any_ground = false
+		for i=0,3 do
+			local on_ground = isVehicleWheelOnGround(vehicle, i)
+			wheels[i + 1] = on_ground
+			if on_ground then any_ground = true end
+		end
+		local ground = (tas.settings.detectGround and any_ground) or nil
+		
+		local controls = {}
+		local analog_controls = {}
+		for _, control in ipairs(tas.analysis_controls) do
+			controls[control] = getPedControlState(localPlayer, control)
+			analog_controls[control] = getPedAnalogControlState(localPlayer, control, true)
 		end
 		
-		return real_time, p, r, v, rv, health, model, nos, keys, ground, analog
+		local analysis = {
+			matrix = matrix,
+			wheels = wheels,
+			controls = controls,
+			analogControls = analog_controls,
+			gameSpeed = getGameSpeed(),
+		}
+		
+		return real_time, p, r, v, rv, health, model, nos, keys, ground, analog, analysis
 					
 	end
 end
+
+-- // Physics-analysis collision capture
+function tas.capture_collision(hitElement, damageImpulseMag, bodyPart, collisionX, collisionY, collisionZ, normalX, normalY, normalZ, hitElementForce, model)
+	if not tas.var.recording then return end
+	
+	local vehicle = tas.cveh(localPlayer)
+	if not vehicle or source ~= vehicle then return end
+	
+	table_insert(tas.analysis.pending_collisions, {
+		tick = getTickCount() - tas.var.record_tick,
+		damageImpulseMag = damageImpulseMag,
+		bodyPart = bodyPart,
+		position = {collisionX, collisionY, collisionZ},
+		normal = {normalX, normalY, normalZ},
+		hitElementForce = hitElementForce,
+		worldModel = model,
+		hitElementType = (hitElement and isElement(hitElement) and getElementType(hitElement)) or "world",
+	})
+end
+addEventHandler("onClientVehicleCollision", root, tas.capture_collision)
 
 -- // Analog Control Wrap
 
