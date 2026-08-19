@@ -10,7 +10,7 @@ addEventHandler("onClientResourceStart", resourceRoot, function()
 
 	if not getResourceFromName("tas") then
 		prompt("SF $$failed ##to start. Enable $$'tas' ##resource then restart this one.")
-		prompt("Download latest: $$https://github.com/chris1384/mta-tas-dm")
+		prompt("Download latest: $$https://github.com/bernardo7894/mta-tas-dm/tree/physics-analysis-export")
 		return
 	end
 

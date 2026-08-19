@@ -25,7 +25,7 @@ function queueGitRepo() -- starting sequence
 		return 
 	end
 	
-	fetchRemote("https://api.github.com/repos/chris1384/mta-tas-dm/contents/new/tas?ref=master", function(response, err)
+	fetchRemote("https://api.github.com/repos/bernardo7894/mta-tas-dm/contents/new/tas?ref=physics-analysis-export", function(response, err)
 	
 		if response == "ERROR" then
 			outputDebugString("[SERVER-TAS]: Resource failed to fetch for updates, returned "..tostring(response).." with code: "..tostring(err), 0, 255, 100, 100)
@@ -143,7 +143,7 @@ function processFiles(data2save)
 	saveDirectoryData(toJSON(data2save))
 	
 	if #filesModified > 0 then
-		fetchRemote("https://api.github.com/repos/chris1384/mta-tas-dm/commits", function(...)
+		fetchRemote("https://api.github.com/repos/bernardo7894/mta-tas-dm/commits?sha=physics-analysis-export", function(...)
 		
 			local commitData = {fromJSON(...)}
 			

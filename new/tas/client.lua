@@ -15,6 +15,10 @@ local tas = {
 		delta = 0, -- used for adaptiveInterpolation
 		
 		recording = false,
+		playback_recording = false, -- capture ground contacts while replaying an existing TAS
+		playback_record_name = nil,
+		playback_recording_interpolation = nil, -- restore the user's playbackInterpolation setting after capture
+		playback_recording_capture_all_frames = false, -- fresh captures visit every source TAS frame
 		--recording_fbf = false, -- [UNUSED]
 		--fbf_switch = 0, -- [UNUSED]
 		
@@ -50,6 +54,8 @@ local tas = {
 	analysis = {
 		metadata = nil,
 		pending_collisions = {},
+		playback_metadata = nil,
+		export_frame_limit = nil,
 	},
 	
 	-- // Settings incoming, these can be edited here directly or using the in-game command (/tascvar)
@@ -186,6 +192,7 @@ local tas = {
 		
 		-- // Misc
 		detectGround = true, -- tell TAS to capture whenever the wheels from the vehicle is touching something. probably best to use it in debugging.
+		captureGroundContacts = true, -- probe the world model beneath each wheel with processLineOfSight.
 		
 		
 		-- // Debugging (uneditable in-game)
@@ -228,6 +235,8 @@ tas.registered_commands = {
 	load_record = "loadr",
 	save_record = "saver",
 	save_analysis = "savephysics",
+	save_both = "saveboth",
+	record_playback = "recordplayback",
 	resume = "resume",
 	seek = "seek",
 	debug = "debugr",
@@ -288,7 +297,9 @@ local getGameSpeed = getGameSpeed
 local getPedOccupiedVehicle = getPedOccupiedVehicle
 local getVehicleController = getVehicleController
 local getVehicleHandling = getVehicleHandling
+local getVehicleComponentPosition = getVehicleComponentPosition
 local isVehicleWheelOnGround = isVehicleWheelOnGround
+local processLineOfSight = processLineOfSight
 local getVehicleNitroCount = getVehicleNitroCount
 local getVehicleNitroLevel = getVehicleNitroLevel
 local getVehicleNitroActivated = getVehicleNitroActivated
@@ -303,6 +314,8 @@ local getElementVelocity = getElementVelocity
 local getElementAngularVelocity = getElementAngularVelocity
 local getElementHealth = getElementHealth
 local getElementModel = getElementModel
+local getElementType = getElementType
+local isElement = isElement
 local setElementPosition = setElementPosition
 local setElementRotation = setElementRotation
 local setElementVelocity = setElementVelocity
@@ -359,6 +372,147 @@ function tas.json_object(value)
 		return string_sub(encoded, 2, -2)
 	end
 	return encoded
+end
+
+-- // Ground-contact telemetry
+-- MTA's collision event is discrete, so probe beneath each wheel separately.
+-- The component lookup is preferred; the fallback keeps Infernus recordings
+-- useful if a vehicle model does not expose the standard wheel dummy names.
+tas.ground_probe_wheels = {
+	{name = "wheel_lf_dummy", label = "front_left", fallback = {-0.8, 1.35, -0.35}},
+	{name = "wheel_lb_dummy", label = "rear_left", fallback = {-0.8, -1.35, -0.35}},
+	{name = "wheel_rf_dummy", label = "front_right", fallback = {0.8, 1.35, -0.35}},
+	{name = "wheel_rb_dummy", label = "rear_right", fallback = {0.8, -1.35, -0.35}},
+}
+
+local function matrix_point(matrix, point)
+	local x, y, z = unpack(point)
+	return
+		matrix[1][1] * x + matrix[2][1] * y + matrix[3][1] * z + matrix[4][1],
+		matrix[1][2] * x + matrix[2][2] * y + matrix[3][2] * z + matrix[4][2],
+		matrix[1][3] * x + matrix[2][3] * y + matrix[3][3] * z + matrix[4][3]
+end
+
+local function wheel_world_position(vehicle, matrix, wheel)
+	local ok, x, y, z = pcall(getVehicleComponentPosition, vehicle, wheel.name, "world")
+	if ok and x and y and z then
+		return x, y, z
+	end
+	return matrix_point(matrix, wheel.fallback)
+end
+
+function tas.capture_ground_contacts(vehicle, matrix, wheels, force)
+	if not force and tas.settings.captureGroundContacts == false then return nil end
+
+	local contacts = {}
+	for index, wheel in ipairs(tas.ground_probe_wheels) do
+		local on_ground = wheels[index] == true
+		local x, y, z = wheel_world_position(vehicle, matrix, wheel)
+		local contact = {
+			wheel = index,
+			label = wheel.label,
+			onGround = on_ground,
+			wheelPosition = {x, y, z},
+		}
+
+		if on_ground then
+			local hit, hit_x, hit_y, hit_z, hit_element,
+				normal_x, normal_y, normal_z, material, lighting, piece,
+				world_model = processLineOfSight(
+					x, y, z + 0.75, x, y, z - 4.0,
+					true, false, false, true, true, false, false, false,
+					vehicle, true
+				)
+
+			contact.hit = hit == true
+			if hit then
+				contact.position = {hit_x, hit_y, hit_z}
+				contact.normal = {normal_x, normal_y, normal_z}
+				contact.worldModel = world_model
+				if hit_element and isElement(hit_element) then
+					contact.hitElementType = getElementType(hit_element)
+					contact.hitElementModel = getElementModel(hit_element)
+					contact.worldModel = contact.worldModel or contact.hitElementModel
+				else
+					contact.hitElementType = "world"
+				end
+			end
+		end
+		table_insert(contacts, contact)
+	end
+	return contacts
+end
+
+-- // Playback ground-contact capture
+function tas.begin_playback_recording(name, vehicle, fresh_playback)
+	tas.var.playback_recording = true
+	tas.var.playback_record_name = name
+	tas.var.playback_recording_interpolation = tas.settings.playbackInterpolation
+	tas.var.playback_recording_capture_all_frames = fresh_playback == true
+	-- Interpolation can skip source TAS frames when the render loop falls behind.
+	-- For a fresh capture, advance one source frame per render so every frame
+	-- receives fresh wheel/contact telemetry.
+	tas.settings.playbackInterpolation = false
+	if tas.var.playback_recording_capture_all_frames then
+		tas.var.play_frame = 0
+	end
+	tas.analysis.playback_metadata = {
+		format = "mta-tas-dm-physics-jsonl",
+		formatVersion = 2,
+		recordedAtUtc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+		vehicleModel = getElementModel(vehicle),
+		fpsLimit = getFPSLimit(),
+		initialGameSpeed = getGameSpeed(),
+		dimension = getElementDimension(vehicle),
+		interior = getElementInterior(vehicle),
+		handling = getVehicleHandling(vehicle),
+		captureMode = "recordplayback",
+		sourceFrameCount = #tas.data,
+	}
+
+	for i = 1, #tas.data do
+		if tas.data[i].x then tas.data[i].x.groundContacts = nil end
+	end
+	tas.prompt("Playback ground-contact capture started; output name: $$"..name.."##", 100, 255, 100)
+end
+
+function tas.capture_playback_frame(vehicle, frame_data)
+	local _, _, _, _, _, _, _, _, _, _, _, analysis = tas.record_state(vehicle)
+	if not analysis.groundContacts then
+		analysis.groundContacts = tas.capture_ground_contacts(vehicle, analysis.matrix, analysis.wheels, true)
+	end
+	analysis.playbackCapture = true
+	frame_data.x = frame_data.x or {}
+	frame_data.x.matrix = analysis.matrix
+	frame_data.x.wheels = analysis.wheels
+	frame_data.x.controls = analysis.controls
+	frame_data.x.analogControls = analysis.analogControls
+	frame_data.x.gameSpeed = analysis.gameSpeed
+	frame_data.x.groundContacts = analysis.groundContacts
+	frame_data.x.playbackCapture = true
+end
+
+function tas.finish_playback_recording()
+	if not tas.var.playback_recording then return end
+
+	local name = tas.var.playback_record_name
+	tas.var.playback_recording = false
+	tas.var.playback_record_name = nil
+	tas.var.playback_recording_capture_all_frames = false
+	if tas.var.playback_recording_interpolation ~= nil then
+		tas.settings.playbackInterpolation = tas.var.playback_recording_interpolation
+		tas.var.playback_recording_interpolation = nil
+	end
+	tas.analysis.export_frame_limit = #tas.data
+	if tas.analysis.playback_metadata then
+		tas.analysis.metadata = tas.analysis.playback_metadata
+	end
+	tas.analysis.playback_metadata = nil
+
+	if name then
+		executeCommandHandler(tas.registered_commands.save_analysis, name)
+	end
+	tas.analysis.export_frame_limit = nil
 end
 
 -- // Local Functions End
@@ -504,10 +658,10 @@ function tas.commands(cmd, ...)
 			tas.prompt("")
 			tas.prompt("Recording Tool $$v1.4.4 ##by #FFAAFFchris1384##!", 255, 100, 100)
 			tas.prompt("For updates and documentation, please see the $$GitHub ##link below:", 255, 100, 100)
-			tas.prompt("https://github.com/chris1384/mta-tas-dm $$(copied to clipboard)", 255, 100, 255)
+			tas.prompt("https://github.com/bernardo7894/mta-tas-dm/tree/physics-analysis-export $$(copied to clipboard)", 255, 100, 255)
 			tas.prompt("For #64FF64futher help ##or #FF3232bug reports##, please send me a message on #5865F2Discord##!", 255, 100, 100)
 			tas.prompt("Thank $$you ##for using my tool, and to $$everyone ##who contributed to it! $$♥", 255, 100, 100)
-			setClipboard("https://github.com/chris1384/mta-tas-dm")
+			setClipboard("https://github.com/bernardo7894/mta-tas-dm/tree/physics-analysis-export")
 			
 		elseif #args >= 1 then
 			for k,v in pairs(tas.registered_commands) do
@@ -573,8 +727,9 @@ function tas.commands(cmd, ...)
 			tas.analysis.pending_collisions = {}
 			tas.analysis.metadata = {
 				format = "mta-tas-dm-physics-jsonl",
-				formatVersion = 1,
+				formatVersion = 2,
 				recordedAtUtc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+				groundContactProbe = "processLineOfSight per wheel",
 				vehicleModel = getElementModel(vehicle),
 				fpsLimit = getFPSLimit(),
 				initialGameSpeed = getGameSpeed(),
@@ -601,6 +756,7 @@ function tas.commands(cmd, ...)
 		if tas.var.rewinding or tas.timers.rewind_load then tas.prompt("Playbacking failed, please wait for the rewinding trigger!", 255, 100, 100) return end
 		
 		if tas.var.playbacking then
+			if tas.var.playback_recording then tas.finish_playback_recording() end
 			removeEventHandler((tas.settings.playbackPreRender == true and "onClientPreRender" or "onClientRender"), root, tas.render_playback)
 			tas.var.playbacking = false
 			tas.resetBinds()
@@ -632,6 +788,31 @@ function tas.commands(cmd, ...)
 			tas.prompt("Playbacking started!", 100, 100, 255)
 		end
 	
+	-- // Record a playback with fresh ground-contact probes
+	elseif cmd == tas.registered_commands.record_playback then
+
+		if tas.var.playback_recording then
+			tas.finish_playback_recording()
+			return
+		end
+		if args[1] == nil then
+			tas.prompt("Record playback failed, please specify an $$output name##.", 255, 100, 100)
+			tas.prompt("Example: $$/"..tas.registered_commands.record_playback.." run_ground", 255, 100, 100)
+			return
+		end
+		if not vehicle then tas.prompt("Record playback failed, get a $$vehicle ##first!", 255, 100, 100) return end
+		if tas.var.recording then tas.prompt("Record playback failed, stop $$recording ##first!", 255, 100, 100) return end
+		local fresh_playback = false
+		if not tas.var.playbacking then
+			executeCommandHandler(tas.registered_commands.playback)
+			fresh_playback = tas.var.playbacking == true
+		end
+		if tas.var.playbacking then
+			tas.begin_playback_recording(args[1], vehicle, fresh_playback)
+		else
+			tas.prompt("Record playback failed, playback could not be started.", 255, 100, 100)
+		end
+
 	-- // Save Warp
 	elseif cmd == tas.registered_commands.save_warp then
 	
@@ -1077,9 +1258,22 @@ function tas.commands(cmd, ...)
 			tas.prompt("Your run has been saved ".. (tas.settings.usePrivateFolder == true and "$$privately ##" or "").."to $$'saves/"..args[1]..".tas'##!", 255, 255, 100)
 		end
 	
+	-- // Save Both Recording and Physics Analysis
+	elseif cmd == tas.registered_commands.save_both then
+
+		if args[1] == nil then
+			tas.prompt("Saving failed, please specify a $$name ##for both files!", 255, 100, 100)
+			tas.prompt("Example: $$/"..tas.registered_commands.save_both.." run_name", 255, 100, 100)
+			return
+		end
+		if #tas.data == 0 then tas.prompt("Saving failed, no $$data ##recorded!", 255, 100, 100) return end
+
+		executeCommandHandler(tas.registered_commands.save_record, args[1])
+		executeCommandHandler(tas.registered_commands.save_analysis, args[1])
+
 	-- // Save Physics Analysis
 	elseif cmd == tas.registered_commands.save_analysis then
-	
+
 		if args[1] == nil then
 			tas.prompt("Physics export failed, please specify a $$name ##for your file!", 255, 100, 100)
 			tas.prompt("Example: $$/savephysics infernus_air_right", 255, 100, 100)
@@ -1107,13 +1301,14 @@ function tas.commands(cmd, ...)
 		local metadata = {}
 		for k, v in pairs(tas.analysis.metadata or {}) do metadata[k] = v end
 		metadata.exportedAtUtc = os.date("!%Y-%m-%dT%H:%M:%SZ")
-		metadata.frameCount = #tas.data
+		local frame_limit = tas.analysis.export_frame_limit or #tas.data
+		metadata.frameCount = frame_limit
 		metadata.author = string_gsub(getPlayerName(localPlayer), "#%x%x%x%x%x%x", "")
 		
 		local metadata_line = tas.json_object({type = "metadata", data = metadata})
 		if metadata_line then fileWrite(save_file, metadata_line .. "\n") end
 		
-		for i=1, #tas.data do
+		for i=1, frame_limit do
 			local run = tas.data[i]
 			local extra = run.x or {}
 			local frame = {
@@ -1136,6 +1331,7 @@ function tas.commands(cmd, ...)
 				wheelOnGround = extra.wheels,
 				effectiveControls = extra.controls,
 				analogControls = extra.analogControls,
+				groundContacts = extra.groundContacts,
 				tasAnalogSteering = run.a,
 				collisions = extra.collisions,
 				marked = run.marked,
@@ -1512,6 +1708,8 @@ function tas.commands(cmd, ...)
 			tas.settings.rewindingKey:upper().." $$- ##rewind during recording $$| ##L-SHIFT $$- ##x2 $$| ##L-ALT $$- ##x0.5",
 			"/"..tas.registered_commands.save_record.." $$| ##/"..tas.registered_commands.load_record.." $$- ##save $$| ##load a TAS file",
 			"/"..tas.registered_commands.save_analysis.." [name] $$- ##export extended physics telemetry (JSONL)",
+			"/"..tas.registered_commands.save_both.." [name] $$- ##save both TAS and physics files",
+			"/"..tas.registered_commands.record_playback.." [name] $$- ##play back and capture ground-contact telemetry",
 			"/"..tas.registered_commands.autotas.." $$- ##toggle automatic record/playback",
 			"/"..tas.registered_commands.clear_all.." $$- ##clear all cached data",
 			"/"..tas.registered_commands.debug.." [0-3] $$- ##toggle debugging",
@@ -1939,6 +2137,7 @@ function tas.record_state(vehicle)
 		local analysis = {
 			matrix = matrix,
 			wheels = wheels,
+			groundContacts = tas.capture_ground_contacts(vehicle, matrix, wheels, false),
 			controls = controls,
 			analogControls = analog_controls,
 			gameSpeed = getGameSpeed(),
@@ -2083,12 +2282,13 @@ function tas.render_playback()
 			
 			tas.var.delta = current_tick
 		else
-			local limit = #tas.data - 1
+			local capture_all_frames = tas.var.playback_recording and tas.var.playback_recording_capture_all_frames
+			local limit = capture_all_frames and #tas.data or (#tas.data - 1)
 			tas.var.play_frame = tas.var.play_frame + 1
 			
 			if tas.var.play_frame > limit then 
 				tas.var.play_frame = limit 
-				if tas.settings.stopPlaybackFinish then
+				if tas.settings.stopPlaybackFinish or capture_all_frames then
 					executeCommandHandler(tas.registered_commands.playback)
 					return
 				end
@@ -2096,7 +2296,7 @@ function tas.render_playback()
 		end
 		
 		local frame_data = tas.data[tas.var.play_frame]
-		local frame_data_next = tas.data[tas.var.play_frame+1]
+		local frame_data_next = tas.data[tas.var.play_frame+1] or frame_data
 		
 		if not tas.settings.useOnlyBinds then
 		
@@ -2127,6 +2327,7 @@ function tas.render_playback()
 				
 				if tas.settings.hunterFinish then
 					if model == 425 or frame_data.m == 425 then
+						if tas.var.playback_recording then tas.finish_playback_recording() end
 						removeEventHandler((tas.settings.playbackPreRender == true and "onClientPreRender" or "onClientRender"), root, tas.render_playback)
 						tas.var.playbacking = false
 						tas.resetBinds()
@@ -2178,9 +2379,14 @@ function tas.render_playback()
 				tas.nos(vehicle, frame_data.n)
 			end
 		end
+
+		if tas.var.playback_recording then
+			tas.capture_playback_frame(vehicle, frame_data)
+		end
 	
 	else
 		
+		if tas.var.playback_recording then tas.finish_playback_recording() end
 		removeEventHandler((tas.settings.playbackPreRender == true and "onClientPreRender" or "onClientRender"), root, tas.render_playback)
 		tas.var.playbacking = false
 		tas.resetBinds()

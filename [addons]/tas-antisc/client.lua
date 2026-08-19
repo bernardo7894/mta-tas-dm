@@ -89,7 +89,7 @@ addEventHandler("onClientResourceStart", resourceRoot, function()
 
 	if not getResourceFromName("tas") then
 		prompt("Anti-Sc $$failed ##to start. Enable $$'tas' ##resource then restart this one.")
-		prompt("Download: $$https://github.com/chris1384/mta-tas-dm")
+		prompt("Download: $$https://github.com/bernardo7894/mta-tas-dm/tree/physics-analysis-export")
 		return
 	end
 

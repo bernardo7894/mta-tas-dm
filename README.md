@@ -71,6 +71,8 @@ It is a complete remake over the old one. It might have a better overall perform
 /seek [frame number] - seek to a frame while playbacking
 BACKSPACE - hold it to rewind the run while recording (+Left Shift to speed it up | +Left Alt to slow it down)
 /saver [name] - save the recorded data to a file
+/savephysics [name] - export extended physics telemetry as JSONL
+/saveboth [name] - save both the TAS recording and physics telemetry
 /loadr [name] - load an existing run
 1.4* /saverg [name] - save the recorded data to a file on server
 1.4* /loadrg [name] - download a .TAS file from the server (use with /loadr upon finishing)
@@ -80,6 +82,13 @@ BACKSPACE - hold it to rewind the run while recording (+Left Shift to speed it u
 /debugr [level] - toggle debugging
 1.4* /tascvar [key] [value] - change settings in-game (use '/tascvar show' to see all commands)
 ```
+
+### 2.1 Physics analysis export (fork)
+
+This fork can export the recorded vehicle state and controls for physics
+analysis. Use `/saveboth [name]` after stopping a recording to create both
+`saves/<name>.tas` and `saves/<name>.physics.jsonl`. The full export format and
+replay workflow are documented in [new/tas/PHYSICS_EXPORT.md](new/tas/PHYSICS_EXPORT.md).
 
 ### 3. Using the tool (example)
 - Get in a vehicle to begin
