@@ -19,6 +19,7 @@ local tas = {
 		playback_record_name = nil,
 		playback_recording_interpolation = nil, -- restore the user's playbackInterpolation setting after capture
 		playback_recording_capture_all_frames = false, -- fresh captures visit every source TAS frame
+		playback_recording_last_tick = nil, -- wall-clock fallback for playback capture dt on onClientRender
 		--recording_fbf = false, -- [UNUSED]
 		--fbf_switch = 0, -- [UNUSED]
 		
@@ -449,6 +450,7 @@ function tas.begin_playback_recording(name, vehicle, fresh_playback)
 	tas.var.playback_record_name = name
 	tas.var.playback_recording_interpolation = tas.settings.playbackInterpolation
 	tas.var.playback_recording_capture_all_frames = fresh_playback == true
+	tas.var.playback_recording_last_tick = getTickCount()
 	-- Interpolation can skip source TAS frames when the render loop falls behind.
 	-- For a fresh capture, advance one source frame per render so every frame
 	-- receives fresh wheel/contact telemetry.
@@ -476,8 +478,17 @@ function tas.begin_playback_recording(name, vehicle, fresh_playback)
 	tas.prompt("Playback ground-contact capture started; output name: $$"..name.."##", 100, 255, 100)
 end
 
-function tas.capture_playback_frame(vehicle, frame_data)
+function tas.capture_playback_frame(vehicle, frame_data, deltaTime)
+	local capture_tick = getTickCount()
+	if type(deltaTime) ~= "number" or deltaTime <= 0 then
+		local previous_tick = tas.var.playback_recording_last_tick
+		deltaTime = previous_tick and math_max(0, capture_tick - previous_tick) or 0
+	end
+	tas.var.playback_recording_last_tick = capture_tick
+
 	local _, _, _, _, _, _, _, _, _, _, _, analysis = tas.record_state(vehicle)
+	analysis.dt = deltaTime
+	analysis.fps = (deltaTime > 0 and 1000 / deltaTime) or 0
 	if not analysis.groundContacts then
 		analysis.groundContacts = tas.capture_ground_contacts(vehicle, analysis.matrix, analysis.wheels, true)
 	end
@@ -488,6 +499,8 @@ function tas.capture_playback_frame(vehicle, frame_data)
 	frame_data.x.controls = analysis.controls
 	frame_data.x.analogControls = analysis.analogControls
 	frame_data.x.gameSpeed = analysis.gameSpeed
+	frame_data.x.dt = analysis.dt
+	frame_data.x.fps = analysis.fps
 	frame_data.x.groundContacts = analysis.groundContacts
 	frame_data.x.playbackCapture = true
 end
@@ -499,6 +512,7 @@ function tas.finish_playback_recording()
 	tas.var.playback_recording = false
 	tas.var.playback_record_name = nil
 	tas.var.playback_recording_capture_all_frames = false
+	tas.var.playback_recording_last_tick = nil
 	if tas.var.playback_recording_interpolation ~= nil then
 		tas.settings.playbackInterpolation = tas.var.playback_recording_interpolation
 		tas.var.playback_recording_interpolation = nil
@@ -2238,7 +2252,7 @@ end
 addEventHandler("onClientPreRender", root, tas.analogControl)
 
 -- // Playbacking
-function tas.render_playback()
+function tas.render_playback(deltaTime)
 
 	local vehicle = tas.cveh(localPlayer)
 	
@@ -2381,7 +2395,7 @@ function tas.render_playback()
 		end
 
 		if tas.var.playback_recording then
-			tas.capture_playback_frame(vehicle, frame_data)
+			tas.capture_playback_frame(vehicle, frame_data, deltaTime)
 		end
 	
 	else

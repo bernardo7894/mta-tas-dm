@@ -5,7 +5,7 @@ existing `.tas` save/load format or normal playback behavior.
 
 ## Captured per frame
 
-- actual `onClientPreRender` delta time (`dt`, milliseconds) and derived FPS
+- actual capture-frame delta time (`dt`, milliseconds) and derived FPS; recording uses the `onClientPreRender` delta, while `/recordplayback` uses that delta when playback is on pre-render and elapsed `getTickCount()` time between callbacks otherwise
 - current game speed
 - full 4x4 vehicle transform matrix (`getElementMatrix(vehicle, false)`)
 - position, Euler rotation, linear velocity and angular velocity
@@ -28,6 +28,7 @@ frame, so render-loop frame skips do not leave source frames without telemetry.
 The user's interpolation setting is restored when capture finishes. It writes
 `<output-name>.physics.jsonl`; the source `.tas` playback data is not modified
 on disk.
+Playback captures copy the measured `dt` and `fps` into each refreshed frame's extended analysis state, so those fields are preserved in the exported format-v2 JSONL.
 
 - vehicle model
 - FPS limit
