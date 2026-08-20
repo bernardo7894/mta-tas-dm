@@ -75,8 +75,9 @@ MTA Wiki documents the following signatures:
 
 The exporter records all component Euler axes and all three documented bases;
 it does not assume which Euler axis means steering, suspension, or spin. The
-new recording is the experiment that will identify those changes from the
-observed traces.
+standalone diagnostic report may show a clearly labeled front-minus-rear
+`componentRotation.root` Euler-Z candidate, but it is not treated as measured
+private GTA steering state until the traces establish that interpretation.
 
 ## Workflow
 
