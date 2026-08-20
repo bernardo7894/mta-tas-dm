@@ -20,6 +20,10 @@ local tas = {
 		playback_recording_interpolation = nil, -- restore the user's playbackInterpolation setting after capture
 		playback_recording_capture_all_frames = false, -- fresh captures visit every source TAS frame
 		playback_recording_last_tick = nil, -- wall-clock fallback for playback capture dt on onClientRender
+		physics_raw_steer_angle = 0, -- derived steering estimate; never treated as GTA internal state
+		physics_steer_last_tick = nil,
+		physics_steer_initialized = false,
+		physics_handling = nil,
 		--recording_fbf = false, -- [UNUSED]
 		--fbf_switch = 0, -- [UNUSED]
 		
@@ -298,7 +302,11 @@ local getGameSpeed = getGameSpeed
 local getPedOccupiedVehicle = getPedOccupiedVehicle
 local getVehicleController = getVehicleController
 local getVehicleHandling = getVehicleHandling
+local getVehicleCurrentGear = getVehicleCurrentGear
+local getVehicleWheelFrictionState = getVehicleWheelFrictionState
+local getVehicleWheelStates = getVehicleWheelStates
 local getVehicleComponentPosition = getVehicleComponentPosition
+local getVehicleComponentRotation = getVehicleComponentRotation
 local isVehicleWheelOnGround = isVehicleWheelOnGround
 local processLineOfSight = processLineOfSight
 local getVehicleNitroCount = getVehicleNitroCount
@@ -386,6 +394,140 @@ tas.ground_probe_wheels = {
 	{name = "wheel_rb_dummy", label = "rear_right", fallback = {0.8, -1.35, -0.35}},
 }
 
+tas.physics_wheel_order = {"front_left", "rear_left", "front_right", "rear_right"}
+tas.physics_component_bases = {"parent", "root", "world"}
+
+local function finite_number(value)
+	return type(value) == "number" and value == value and value > -math.huge and value < math.huge
+end
+
+local function vector_add(a, b)
+	return {a[1] + b[1], a[2] + b[2], a[3] + b[3]}
+end
+
+local function vector_subtract(a, b)
+	return {a[1] - b[1], a[2] - b[2], a[3] - b[3]}
+end
+
+local function vector_scale(a, scale)
+	return {a[1] * scale, a[2] * scale, a[3] * scale}
+end
+
+local function vector_cross(a, b)
+	return {
+		a[2] * b[3] - a[3] * b[2],
+		a[3] * b[1] - a[1] * b[3],
+		a[1] * b[2] - a[2] * b[1],
+	}
+end
+
+local function vector_dot(a, b)
+	return a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+end
+
+local function matrix_vector(matrix, vector)
+	if type(matrix) ~= "table" or type(vector) ~= "table" then return nil end
+	if type(matrix[1]) ~= "table" or type(matrix[2]) ~= "table" or type(matrix[3]) ~= "table" then return nil end
+	local x, y, z = vector[1], vector[2], vector[3]
+	if not (finite_number(x) and finite_number(y) and finite_number(z)) then return nil end
+	return {
+		matrix[1][1] * x + matrix[2][1] * y + matrix[3][1] * z,
+		matrix[1][2] * x + matrix[2][2] * y + matrix[3][2] * z,
+		matrix[1][3] * x + matrix[2][3] * y + matrix[3][3] * z,
+	}
+end
+
+local function matrix_basis(matrix)
+	if type(matrix) ~= "table" or type(matrix[1]) ~= "table" or type(matrix[2]) ~= "table" or type(matrix[3]) ~= "table" then return nil end
+	return {
+		right = {matrix[1][1], matrix[1][2], matrix[1][3]},
+		forward = {matrix[2][1], matrix[2][2], matrix[2][3]},
+		up = {matrix[3][1], matrix[3][2], matrix[3][3]},
+	}
+end
+
+local function safe_component_vector(function_name, vehicle, component, base)
+	if type(function_name) ~= "function" then return nil end
+	local ok, x, y, z = pcall(function_name, vehicle, component, base)
+	if not (ok and finite_number(x) and finite_number(y) and finite_number(z)) then return nil end
+	return {x, y, z}
+end
+
+local function safe_numeric_call(function_name, ...)
+	if type(function_name) ~= "function" then return nil end
+	local ok, value = pcall(function_name, ...)
+	if not ok or not finite_number(value) then return nil end
+	return value
+end
+
+local function handling_center_of_mass(handling)
+	local value = type(handling) == "table" and handling.centerOfMass or nil
+	if type(value) == "table" then
+		local x = tonumber(value[1] or value.x)
+		local y = tonumber(value[2] or value.y)
+		local z = tonumber(value[3] or value.z)
+		if finite_number(x) and finite_number(y) and finite_number(z) then
+			return {x, y, z}
+		end
+	end
+	return {0, 0, 0}
+end
+
+local function matrix_origin(matrix, fallback)
+	if type(matrix) == "table" and type(matrix[4]) == "table" and
+		finite_number(matrix[4][1]) and finite_number(matrix[4][2]) and finite_number(matrix[4][3]) then
+		return {matrix[4][1], matrix[4][2], matrix[4][3]}
+	end
+	return fallback
+end
+
+local function ground_contact_for(contacts, index)
+	for _, contact in ipairs(contacts or {}) do
+		if contact.wheel == index then return contact end
+	end
+	return nil
+end
+
+local function component_transforms(vehicle, component)
+	local positions, rotations = {}, {}
+	for _, base in ipairs(tas.physics_component_bases) do
+		positions[base] = safe_component_vector(getVehicleComponentPosition, vehicle, component, base)
+		rotations[base] = safe_component_vector(getVehicleComponentRotation, vehicle, component, base)
+	end
+	return positions, rotations
+end
+
+function tas.physics_telemetry_api_status()
+	return {
+		getVehicleWheelFrictionState = type(getVehicleWheelFrictionState) == "function",
+		getVehicleWheelStates = type(getVehicleWheelStates) == "function",
+		isVehicleWheelOnGround = type(isVehicleWheelOnGround) == "function",
+		getVehicleCurrentGear = type(getVehicleCurrentGear) == "function",
+		getVehicleComponentPosition = type(getVehicleComponentPosition) == "function",
+		getVehicleComponentRotation = type(getVehicleComponentRotation) == "function",
+	}
+end
+
+function tas.physics_telemetry_metadata()
+	return {
+		schema = "mta-tas-dm-wheel-telemetry-v1",
+		apiAvailability = tas.physics_telemetry_api_status(),
+		wheelOrder = tas.physics_wheel_order,
+		wheelIndexMeaning = "MTA wheel index: 0 front-left, 1 rear-left, 2 front-right, 3 rear-right",
+		componentBases = tas.physics_component_bases,
+		measuredFields = {"onGround", "frictionState", "wheelState", "componentPosition", "componentRotation"},
+		derivedFields = {"contactPointVelocityRaw", "contactPointVelocityWorldPerSecond", "vehicleBasisProjection"},
+		derivedVelocity = "v_point = linearVelocity + cross(angularVelocity, point - centerOfMass); source units use getElementVelocity/getElementAngularVelocity raw values",
+	}
+end
+
+function tas.reset_physics_telemetry_state(vehicle)
+	tas.var.physics_raw_steer_angle = 0
+	tas.var.physics_steer_last_tick = nil
+	tas.var.physics_steer_initialized = false
+	tas.var.physics_handling = vehicle and getVehicleHandling(vehicle) or nil
+end
+
 local function matrix_point(matrix, point)
 	local x, y, z = unpack(point)
 	return
@@ -444,6 +586,122 @@ function tas.capture_ground_contacts(vehicle, matrix, wheels, force)
 	return contacts
 end
 
+local function capture_steering_telemetry(controls, analog_controls, handling, current_tick)
+	local left = tonumber(analog_controls.vehicle_left)
+	local right = tonumber(analog_controls.vehicle_right)
+	if not finite_number(left) then left = controls.vehicle_left and 1 or 0 end
+	if not finite_number(right) then right = controls.vehicle_right and 1 or 0 end
+	left = math_max(0, math_min(1, left))
+	right = math_max(0, math_min(1, right))
+
+	-- CAutomobile::ProcessControlInputs receives a signed steering target.  This
+	-- is intentionally labeled derived: Lua cannot read m_fRawSteerAngle or
+	-- m_fSteerAngle from the GTA vehicle object.
+	local target = left - right
+	local previous = tas.var.physics_raw_steer_angle or 0
+	local timestep = 0
+	if tas.var.physics_steer_initialized and tas.var.physics_steer_last_tick then
+		local elapsed = current_tick - tas.var.physics_steer_last_tick
+		if elapsed >= 0 then timestep = elapsed * 0.05 end -- CTimer step: milliseconds / 20
+	end
+	local current = previous + (target - previous) / 5 * timestep
+	current = math_max(-1, math_min(1, current))
+	tas.var.physics_raw_steer_angle = current
+	tas.var.physics_steer_last_tick = current_tick
+	tas.var.physics_steer_initialized = true
+
+	local steering_lock = type(handling) == "table" and tonumber(handling.steeringLock) or nil
+	local steering_angle = nil
+	if finite_number(steering_lock) then
+		steering_angle = steering_lock * (current >= 0 and 1 or -1) * current * current
+	end
+	return {
+		measured = {
+			controlLeft = controls.vehicle_left == true,
+			controlRight = controls.vehicle_right == true,
+			analogLeft = left,
+			analogRight = right,
+		},
+		derived = {
+			target = target,
+			rawSteerAngle = current,
+			steeringAngleDegrees = steering_angle,
+			steeringLockDegrees = steering_lock,
+			ctimerStep = timestep,
+			method = "reconstructed from sampled Lua controls; not GTA internal m_fRawSteerAngle/m_fSteerAngle",
+		},
+	}
+end
+
+function tas.capture_wheel_telemetry(vehicle, matrix, position, velocity, angular_velocity, wheels, ground_contacts, handling, steering)
+	local structural_states = nil
+	if type(getVehicleWheelStates) == "function" then
+		local ok, front_left, rear_left, front_right, rear_right = pcall(getVehicleWheelStates, vehicle)
+		if ok then
+			structural_states = {
+				front_left = front_left,
+				rear_left = rear_left,
+				front_right = front_right,
+				rear_right = rear_right,
+			}
+		end
+	end
+
+	local basis = matrix_basis(matrix)
+	local origin = matrix_origin(matrix, position)
+	local center_of_mass = handling_center_of_mass(handling)
+	local center_of_mass_world = matrix_vector(matrix, center_of_mass)
+	local wheels_out = {}
+	for index, wheel in ipairs(tas.ground_probe_wheels) do
+		local label = wheel.label
+		local positions, rotations = component_transforms(vehicle, wheel.name)
+		local friction_state = safe_numeric_call(getVehicleWheelFrictionState, vehicle, index - 1)
+		local contact = ground_contact_for(ground_contacts, index)
+		local point_world = contact and contact.position or positions.world or positions.root or positions.parent
+		local point_source = (contact and contact.position and "groundContacts.position") or "componentPosition"
+		local derived = {
+			contactPointWorld = point_world,
+			contactPointSource = point_source,
+			vehicleBasisWorld = basis,
+			centerOfMassLocal = center_of_mass,
+		}
+		if point_world and origin and center_of_mass_world and velocity and angular_velocity then
+			local distance_from_com = vector_subtract(vector_subtract(point_world, origin), center_of_mass_world)
+			local point_velocity_raw = vector_add(velocity, vector_cross(angular_velocity, distance_from_com))
+			derived.contactPointVelocityRaw = point_velocity_raw
+			derived.contactPointVelocityWorldPerSecond = vector_scale(point_velocity_raw, 50)
+			if basis then
+				derived.vehicleBasisProjection = {
+					right = vector_dot(point_velocity_raw, basis.right),
+					forward = vector_dot(point_velocity_raw, basis.forward),
+					up = vector_dot(point_velocity_raw, basis.up),
+				}
+			end
+		end
+		wheels_out[label] = {
+			index = index - 1,
+			component = wheel.name,
+			measured = {
+				onGround = wheels[index],
+				frictionState = friction_state,
+				wheelState = structural_states and structural_states[label] or nil,
+				componentPosition = positions,
+				componentRotation = rotations,
+				groundContact = contact,
+			},
+			derived = derived,
+		}
+	end
+
+	return {
+		schema = "mta-tas-dm-wheel-telemetry-v1",
+		wheelOrder = tas.physics_wheel_order,
+		currentGear = safe_numeric_call(getVehicleCurrentGear, vehicle),
+		steering = steering,
+		wheels = wheels_out,
+	}
+end
+
 -- // Playback ground-contact capture
 function tas.begin_playback_recording(name, vehicle, fresh_playback)
 	tas.var.playback_recording = true
@@ -458,9 +716,10 @@ function tas.begin_playback_recording(name, vehicle, fresh_playback)
 	if tas.var.playback_recording_capture_all_frames then
 		tas.var.play_frame = 0
 	end
+	tas.reset_physics_telemetry_state(vehicle)
 	tas.analysis.playback_metadata = {
 		format = "mta-tas-dm-physics-jsonl",
-		formatVersion = 2,
+		formatVersion = 3,
 		recordedAtUtc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 		vehicleModel = getElementModel(vehicle),
 		fpsLimit = getFPSLimit(),
@@ -468,6 +727,7 @@ function tas.begin_playback_recording(name, vehicle, fresh_playback)
 		dimension = getElementDimension(vehicle),
 		interior = getElementInterior(vehicle),
 		handling = getVehicleHandling(vehicle),
+		wheelTelemetry = tas.physics_telemetry_metadata(),
 		captureMode = "recordplayback",
 		sourceFrameCount = #tas.data,
 	}
@@ -502,6 +762,7 @@ function tas.capture_playback_frame(vehicle, frame_data, deltaTime)
 	frame_data.x.dt = analysis.dt
 	frame_data.x.fps = analysis.fps
 	frame_data.x.groundContacts = analysis.groundContacts
+	frame_data.x.vehicleTelemetry = analysis.vehicleTelemetry
 	frame_data.x.playbackCapture = true
 end
 
@@ -732,6 +993,7 @@ function tas.commands(cmd, ...)
 			tas.prompt("Recording stopped! ($$#"..tostring(#tas.data).." ##frames)", 100, 255, 100)
 		else
 			tas.data = {}
+			tas.reset_physics_telemetry_state(vehicle)
 			
 			if not tas.settings.enableEditorMode and not tas.settings.keepWarpData then
 				tas.warps = {}
@@ -741,7 +1003,7 @@ function tas.commands(cmd, ...)
 			tas.analysis.pending_collisions = {}
 			tas.analysis.metadata = {
 				format = "mta-tas-dm-physics-jsonl",
-				formatVersion = 2,
+				formatVersion = 3,
 				recordedAtUtc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 				groundContactProbe = "processLineOfSight per wheel",
 				vehicleModel = getElementModel(vehicle),
@@ -750,6 +1012,7 @@ function tas.commands(cmd, ...)
 				dimension = getElementDimension(vehicle),
 				interior = getElementInterior(vehicle),
 				handling = getVehicleHandling(vehicle),
+				wheelTelemetry = tas.physics_telemetry_metadata(),
 			}
 			
 			tas.var.recording = true
@@ -1118,6 +1381,7 @@ function tas.commands(cmd, ...)
 			
 			tas.nos(vehicle, resume_data.n)
 			
+			tas.reset_physics_telemetry_state(vehicle)
 			addEventHandler("onClientPreRender", root, tas.render_record, true, "high+10")
 			tas.var.recording = true
 			
@@ -1346,6 +1610,7 @@ function tas.commands(cmd, ...)
 				effectiveControls = extra.controls,
 				analogControls = extra.analogControls,
 				groundContacts = extra.groundContacts,
+				vehicleTelemetry = extra.vehicleTelemetry,
 				tasAnalogSteering = run.a,
 				collisions = extra.collisions,
 				marked = run.marked,
@@ -2148,13 +2413,22 @@ function tas.record_state(vehicle)
 			analog_controls[control] = getPedAnalogControlState(localPlayer, control, true)
 		end
 		
+		if not tas.var.physics_handling then
+			tas.var.physics_handling = getVehicleHandling(vehicle)
+		end
+		local ground_contacts = tas.capture_ground_contacts(vehicle, matrix, wheels, false)
+		local steering_telemetry = capture_steering_telemetry(controls, analog_controls, tas.var.physics_handling, current_tick)
 		local analysis = {
 			matrix = matrix,
 			wheels = wheels,
-			groundContacts = tas.capture_ground_contacts(vehicle, matrix, wheels, false),
+			groundContacts = ground_contacts,
 			controls = controls,
 			analogControls = analog_controls,
 			gameSpeed = getGameSpeed(),
+			vehicleTelemetry = tas.capture_wheel_telemetry(
+				vehicle, matrix, p, v, rv, wheels, ground_contacts,
+				tas.var.physics_handling, steering_telemetry
+			),
 		}
 		
 		return real_time, p, r, v, rv, health, model, nos, keys, ground, analog, analysis

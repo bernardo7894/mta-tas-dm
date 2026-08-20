@@ -34,7 +34,9 @@ The purpose of these changes is to augment the existing TAS recorder with physic
 
 ## Added Physics Telemetry
 
-The fork adds a separate physics-analysis export.
+The fork adds a separate physics-analysis export. Format-v3 is backward
+compatible with the existing format-v2 reader and adds optional wheel/gear
+telemetry; ordinary `.tas` files are unchanged.
 
 Command:
 
@@ -86,7 +88,19 @@ Per-frame information includes:
 - effective GTA control states;
 - analog control values;
 - all four wheel-on-ground states;
-- collision events associated with the frame.
+- collision events associated with the frame;
+- optional format-v3 `vehicleTelemetry.currentGear`;
+- optional explicit wheel identities in MTA order: `front_left`, `rear_left`,
+  `front_right`, `rear_right`;
+- per-wheel measured `onGround`, `frictionState`, structural `wheelState`,
+  component positions, and component rotations in `parent`, `root`, and
+  `world` bases when the MTA API returns them;
+- explicitly labeled derived contact-point velocity and vehicle-basis
+  projections. These are reconstructed from the recorded linear/angular
+  velocity and observed point, not claimed to be GTA's private `contactSpeeds[]`;
+- a clearly labeled Lua control-based steering estimate. MTA Lua does not
+  expose private `m_fRawSteerAngle`/`m_fSteerAngle`, so those estimates are not
+  measured internal GTA state.
 
 Collision telemetry includes useful values exposed by MTA such as:
 
@@ -140,6 +154,12 @@ The `.tas` recording is useful for MTA playback/debugging. To replay a loaded
 changing the source `.tas` on disk.
 
 The `.physics.jsonl` recording is the primary input for standalone physics analysis.
+Format-v3 metadata records the API availability and component bases attempted;
+missing APIs/components produce `nil` optional fields rather than dropping the
+frame. On the local MTA 1.6.0.24139 installation, the wheel friction, wheel
+contact, current-gear, and component position/rotation APIs are present in the
+client binary and documented as client-side (wheel structural states are a
+shared API).
 
 ## Benchmark Philosophy
 
@@ -180,7 +200,11 @@ Useful initial data includes:
 
 At minimum, ensure edited Lua remains syntactically valid.
 
-For `client.lua`, a `luac -p` syntax check is useful where a compatible Lua compiler is available.
+For `client.lua`, run `luac -p` where a compatible Lua compiler is available.
+The repository also has a Lua-stub telemetry harness under `tests/` covering
+stable wheel ordering, measured fields, and unavailable component/friction
+observables. The Python tests cover format-v2 parsing and format-v3 diagnostic
+joining.
 
 Also inspect the actual Git diff before committing. This upstream file historically uses CRLF line endings; avoid creating enormous diffs consisting only of line-ending normalization.
 
