@@ -58,6 +58,21 @@ local contacts = {
     {wheel = 3, position = {10, 20, 29}, onGround = true},
     {wheel = 4, position = {10, 20, 29}, onGround = false},
 }
+tas.reset_physics_telemetry_state("vehicle")
+local steering_estimate_1 = tas.capture_steering_telemetry(
+    {vehicle_left = true, vehicle_right = false},
+    {vehicle_left = 0, vehicle_right = 0},
+    {centerOfMass = {0, 0, -0.25}, steeringLock = 30}, 100
+)
+local steering_estimate_2 = tas.capture_steering_telemetry(
+    {vehicle_left = true, vehicle_right = false},
+    {vehicle_left = 0, vehicle_right = 0},
+    {centerOfMass = {0, 0, -0.25}, steeringLock = 30}, 110
+)
+assert(steering_estimate_1.derived.target == 1)
+assert(steering_estimate_1.measured.analogLeft == 0)
+assert(steering_estimate_2.derived.rawSteerAngle > 0)
+
 local steering = {derived = {steeringAngleDegrees = 7}}
 local result = tas.capture_wheel_telemetry(
     "vehicle", matrix, {10, 20, 30}, {1, 2, 3}, {0, 0, 1},

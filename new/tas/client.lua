@@ -586,11 +586,20 @@ function tas.capture_ground_contacts(vehicle, matrix, wheels, force)
 	return contacts
 end
 
-local function capture_steering_telemetry(controls, analog_controls, handling, current_tick)
-	local left = tonumber(analog_controls.vehicle_left)
-	local right = tonumber(analog_controls.vehicle_right)
-	if not finite_number(left) then left = controls.vehicle_left and 1 or 0 end
-	if not finite_number(right) then right = controls.vehicle_right and 1 or 0 end
+function tas.capture_steering_telemetry(controls, analog_controls, handling, current_tick)
+	local analog_left = tonumber(analog_controls.vehicle_left)
+	local analog_right = tonumber(analog_controls.vehicle_right)
+	local left = analog_left
+	local right = analog_right
+	-- Keyboard input reports an analog value of zero while the effective
+	-- digital control is true.  Preserve the measured analog value, but use the
+	-- effective control as the derived target in that case.
+	if not finite_number(left) or (left == 0 and controls.vehicle_left == true) then
+		left = controls.vehicle_left and 1 or 0
+	end
+	if not finite_number(right) or (right == 0 and controls.vehicle_right == true) then
+		right = controls.vehicle_right and 1 or 0
+	end
 	left = math_max(0, math_min(1, left))
 	right = math_max(0, math_min(1, right))
 
@@ -619,8 +628,8 @@ local function capture_steering_telemetry(controls, analog_controls, handling, c
 		measured = {
 			controlLeft = controls.vehicle_left == true,
 			controlRight = controls.vehicle_right == true,
-			analogLeft = left,
-			analogRight = right,
+			analogLeft = analog_left,
+			analogRight = analog_right,
 		},
 		derived = {
 			target = target,
@@ -2417,7 +2426,7 @@ function tas.record_state(vehicle)
 			tas.var.physics_handling = getVehicleHandling(vehicle)
 		end
 		local ground_contacts = tas.capture_ground_contacts(vehicle, matrix, wheels, false)
-		local steering_telemetry = capture_steering_telemetry(controls, analog_controls, tas.var.physics_handling, current_tick)
+		local steering_telemetry = tas.capture_steering_telemetry(controls, analog_controls, tas.var.physics_handling, current_tick)
 		local analysis = {
 			matrix = matrix,
 			wheels = wheels,
