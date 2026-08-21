@@ -72,6 +72,13 @@ def test_timing_probe_captures_native_timer_fields():
     assert "timerStep:timerStep.readFloat()" in source
 
 
+def test_cpp_collision_stream_flushes_partial_batches():
+    source = TOOL.read_text(encoding="utf-8")
+    assert 'MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY' in source
+    assert 'os.environ["MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY"] = "1"' in source
+    assert '"cpp_collision_flush_every"' in source
+
+
 def test_native_capture_start_delay_handles_crlf_and_restores(tmp_path):
     tool = _load_tool()
     resource = (

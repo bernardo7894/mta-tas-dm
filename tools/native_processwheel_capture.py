@@ -1327,6 +1327,9 @@ def main() -> int:
     cpp_binary = args.output.with_suffix(args.output.suffix + ".cpp.bin")
     cpp_collision_binary = args.output.with_suffix(args.output.suffix + ".collision.bin")
     timing_output = args.output.with_suffix(args.output.suffix + ".timing.jsonl")
+    previous_collision_flush_every = os.environ.get(
+        "MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY"
+    )
     if args.cpp_hook or args.timing_only:
         timing_output.parent.mkdir(parents=True, exist_ok=True)
         if timing_output.exists():
@@ -1346,6 +1349,10 @@ def main() -> int:
             if cpp_collision_binary.exists():
                 cpp_collision_binary.unlink()
             os.environ["MTA_NATIVE_COLLISION_ALT_CPP_OUTPUT"] = str(cpp_collision_binary.resolve())
+            # The native collision stream is a forensic side channel.  Flush
+            # each row so a short valid run cannot be mistaken for a zero-row
+            # capture merely because its final partial batch was never flushed.
+            os.environ["MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY"] = "1"
     os.environ["MTA_BIN"] = str(mta_bin)
     restore_registry = _prepare_registry(mta_bin) if args.prepare_registry else (lambda: None)
     restore_tas_folder = _prepare_public_tas_folder(mta_bin) if args.prepare_tas_folder else (lambda: None)
@@ -1425,6 +1432,7 @@ def main() -> int:
             str(cpp_collision_binary.resolve())
             if args.cpp_hook and args.collision_diagnostics else ""
         ),
+        "cpp_collision_flush_every": bool(args.cpp_hook and args.collision_diagnostics),
         "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
         "suspension_stage_only": bool(args.suspension_stage_only),
@@ -1565,6 +1573,10 @@ def main() -> int:
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_NO_MATRIX", None)
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_STATIC_LATCH", None)
                 os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_OUTPUT", None)
+                if previous_collision_flush_every is None:
+                    os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY", None)
+                else:
+                    os.environ["MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY"] = previous_collision_flush_every
     print(f"native capture written to {args.output}")
     return 0
 

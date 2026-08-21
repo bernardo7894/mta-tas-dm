@@ -125,9 +125,11 @@ python tools/native_processwheel_capture.py `
 For the lower-overhead build, add `--cpp-hook`; after playback, convert the
 sibling binary stream. Combining `--cpp-hook --collision-diagnostics` also
 writes a `.collision.bin` stream from the two verified `ApplyCollisionAlt`
-call sites (`0x54C9FA`, `0x54CAC2`); convert it with
-`infernus-physics/tools/convert_native_collision_alt_cpp.py` when auditing
-GTA's direct collision response.
+call sites (`0x54C9FA`, `0x54CAC2`). The harness automatically enables the
+diagnostic `MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY=1` mode so a final partial
+batch is persisted; metadata records `cpp_collision_flush_every=true`. Convert
+it with `infernus-physics/tools/convert_native_collision_alt_cpp.py` when
+auditing GTA's direct collision response.
 
 After playback, convert the wheel sibling binary stream:
 
