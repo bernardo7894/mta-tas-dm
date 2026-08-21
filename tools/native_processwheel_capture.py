@@ -139,6 +139,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const processControlCollisionCheck = main.base.add(0x2A29C0);
     const processCollision = main.base.add(0x14DFB0);
     const checkCollision = main.base.add(0x14D920);
+    const applyForce = main.base.add(0x142B50);
     const gameFrameCounter = main.base.add(0x77CB4C);
     const gameTimeMs = main.base.add(0x77CB84);
     let frame = 0, processCalls = 0, wheelCalls = 0, batch = [];
@@ -192,6 +193,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             vehicleFlagsByte3:u8(vehicle.add(0x42B)),
                             audioChangingGear:((u8(vehicle.add(0x42B)) || 0) & 0x20) !== 0,
                             collisionProcess:pendingCollisions.get(key) || null,
+                            applyForces:[],
                         }});
                         pendingCollisions.delete(key);
                         this.nativeControlKey = key;
@@ -217,6 +219,34 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     if (snapshotChanged(this.nativeCollisionBefore, after))
                         pendingCollisions.set(this.nativeCollisionKey, {{
                             before:this.nativeCollisionBefore,
+                            after:after,
+                        }});
+                }} catch(_) {{}}
+            }}
+        }});
+        Interceptor.attach(applyForce, {{
+            onEnter() {{
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativeForceKey = vehicle.toString();
+                    this.nativeForceVehicle = vehicle;
+                    this.nativeForceBefore = physicalSnapshot(vehicle);
+                    const sp = this.context.esp;
+                    this.nativeForceVector = [f(sp.add(4)), f(sp.add(8)), f(sp.add(12))];
+                    this.nativeForcePoint = [f(sp.add(16)), f(sp.add(20)), f(sp.add(24))];
+                }} catch(_) {{}}
+            }},
+            onLeave() {{
+                if (!this.nativeForceKey) return;
+                try {{
+                    const control = controlStates.get(this.nativeForceKey);
+                    const after = physicalSnapshot(this.nativeForceVehicle);
+                    if (control && snapshotChanged(this.nativeForceBefore, after))
+                        control.applyForces.push({{
+                            force:this.nativeForceVector,
+                            point:this.nativeForcePoint,
+                            before:this.nativeForceBefore,
                             after:after,
                         }});
                 }} catch(_) {{}}
@@ -302,7 +332,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     gasPedal:f(vehicle.add(0x49C)), brakePedal:f(vehicle.add(0x4A0)),
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
-                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner}} : null;}})(),
+                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces}} : null;}})(),
                     linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular
                 }};
                 wheelCalls++;
