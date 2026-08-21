@@ -72,8 +72,16 @@ controls-only runs, `--cpp-no-matrix` isolates matrix-snapshot overhead; the
 local C++ matrix read is also SEH-guarded. `--pose-linear-only-playback` is a
 separate diagnostic mode that forces recorded position/rotation/linear velocity
 while leaving angular velocity native, and must not be treated as an independent
-trajectory. `--static-skid-diagnostics` (Frida only) reads the private
-`bAlreadySkidding` global at `0xC1CDAC` for source-semantic verification.
+trajectory. `--static-skid-diagnostics` (Frida) reads the private
+`bAlreadySkidding` global at `0xC1CDAC` for source-semantic verification;
+`--cpp-static-skid-diagnostics` enables the equivalent C++ direct read while
+ordinary C++ rows use `0xFF` sentinels for those optional bytes. The separate
+`--one-tick-config <json>` mode bypasses TAS playback, writes one public
+state/control sample, and lets GTA execute naturally; optional `nativeInternal`
+values initialize directly known private state before the matching
+`ProcessControl` call. Compare its `controlEntry`/`controlExit` rows with the
+simulator's pre-step diagnostic; it is state-input evidence, not a continuous
+trajectory benchmark.
 
 Example:
 

@@ -252,7 +252,12 @@ resource imposes recorded state and the native rows are state-forced diagnostics
 `--pose-linear-only-playback` is a separate diagnostic mode that writes recorded
 position/rotation/linear velocity but leaves angular velocity native; it is not
 an independent trajectory. `--static-skid-diagnostics` reads the private
-`bAlreadySkidding` global at `0xC1CDAC` on the Frida route. `--cpp-no-matrix` isolates matrix-snapshot overhead,
+`bAlreadySkidding` global at `0xC1CDAC` on the Frida route; the C++ route has the
+opt-in equivalent `--cpp-static-skid-diagnostics` and otherwise emits `0xFF`
+sentinels for that optional field. `--one-tick-config` is a separate
+state-input diagnostic that writes one public state/control sample and captures
+native `ProcessControl` entry/exit; it is not continuous independent evidence.
+`--cpp-no-matrix` isolates matrix-snapshot overhead,
 and the C++ matrix snapshot is guarded in the local debug source for robust long
 runs. With `--cpp-hook --collision-diagnostics`, the C++ route also records direct
 `ApplyCollisionAlt` outputs at call sites `0x54C9FA` and `0x54CAC2`. The C++ route emits a binary batch stream converted by

@@ -53,6 +53,7 @@ def _native_script(
     install_wheel_hook: bool = True,
     collision_diagnostics: bool = False,
     static_skid_diagnostics: bool = False,
+    one_tick_config: dict[str, Any] | None = None,
 ) -> str:
     bin_dir = _js_string(str(mta_bin))
     mta_dir = _js_string(str(mta_bin / "MTA"))
@@ -64,6 +65,7 @@ const OUTPUT_LABEL = {_js_string(output_label)};
 const INSTALL_NATIVE_WHEEL_HOOK = {str(install_wheel_hook).lower()};
 const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
 const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
+const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":"))};
 let bootstrapDone = false;
 
 Process.setExceptionHandler(function(details) {{
@@ -148,6 +150,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const gameTimeMs = main.base.add(0x77CB84);
     const staticAlreadySkidding = main.base.add(0x81CDAC);
     let frame = 0, processCalls = 0, wheelCalls = 0, batch = [];
+    let oneTickInjected = false;
     const controlStates = new Map();
     const pendingCollisions = new Map();
     const f = p => {{ try {{ return p.readFloat(); }} catch(_) {{ return null; }} }};
@@ -194,6 +197,59 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                 const vehicle = this.context.ecx;
                 try {{
                     if (vehicle.add(0x22).readU16() === 411) {{
+                        if (!oneTickInjected && ONE_TICK_CONFIG.nativeInternal && ONE_TICK_CONFIG.position) {{
+                            const target = ONE_TICK_CONFIG.position;
+                            const velocityTarget = ONE_TICK_CONFIG.velocity;
+                            const angularTarget = ONE_TICK_CONFIG.angularVelocity;
+                            const current = vec(vehicle.add(0x04));
+                            const currentVelocity = vec(vehicle.add(0x44));
+                            const currentAngular = vec(vehicle.add(0x50));
+                            const distance = current && target
+                                ? Math.sqrt((current[0] - target[0]) ** 2 + (current[1] - target[1]) ** 2 + (current[2] - target[2]) ** 2)
+                                : Infinity;
+                            const velocityDistance = currentVelocity && velocityTarget
+                                ? Math.sqrt((currentVelocity[0] - velocityTarget[0]) ** 2 + (currentVelocity[1] - velocityTarget[1]) ** 2 + (currentVelocity[2] - velocityTarget[2]) ** 2)
+                                : 0;
+                            const angularDistance = currentAngular && angularTarget
+                                ? Math.sqrt((currentAngular[0] - angularTarget[0]) ** 2 + (currentAngular[1] - angularTarget[1]) ** 2 + (currentAngular[2] - angularTarget[2]) ** 2)
+                                : 0;
+                            if (distance < 0.01 && velocityDistance < 0.02 && angularDistance < 0.02) {{ 
+                                const internal = ONE_TICK_CONFIG.nativeInternal;
+                                const writeArray = (offset, values) => {{
+                                    if (!Array.isArray(values)) return;
+                                    for (let i = 0; i < Math.min(4, values.length); i++)
+                                        vehicle.add(offset + i * 4).writeFloat(Number(values[i]));
+                                }};
+                                const writeVector = (pointer, value) => {{
+                                    if (!Array.isArray(value) || value.length < 3) return;
+                                    pointer.writeFloat(Number(value[0]));
+                                    pointer.add(4).writeFloat(Number(value[1]));
+                                    pointer.add(8).writeFloat(Number(value[2]));
+                                }};
+                                try {{
+                                    writeArray(0x7D4, internal.suspensionCompression);
+                                    writeArray(0x7E4, internal.suspensionCompressionPrevious);
+                                    writeArray(0x7F4, internal.wheelCounts);
+                                    if (Array.isArray(internal.wheelCollisionPoints))
+                                        for (let i = 0; i < Math.min(4, internal.wheelCollisionPoints.length); i++)
+                                            writeVector(vehicle.add(0x724 + i * 0x2C), internal.wheelCollisionPoints[i]);
+                                    if (Array.isArray(internal.wheelCollisionNormals))
+                                        for (let i = 0; i < Math.min(4, internal.wheelCollisionNormals.length); i++)
+                                            writeVector(vehicle.add(0x724 + i * 0x2C + 0x10), internal.wheelCollisionNormals[i]);
+                                    if (internal.rawSteerAngle !== undefined)
+                                        vehicle.add(0x58C).writeFloat(Number(internal.rawSteerAngle));
+                                    if (internal.steerAngle !== undefined)
+                                        vehicle.add(0x494).writeFloat(Number(internal.steerAngle));
+                                    if (internal.vehicleColProcessed === false)
+                                        vehicle.add(0x42A).writeU8(vehicle.add(0x42A).readU8() & 0xFE);
+                                    else if (internal.vehicleColProcessed === true)
+                                        vehicle.add(0x42A).writeU8(vehicle.add(0x42A).readU8() | 0x01);
+                                    if (internal.staticAlreadySkidding !== undefined)
+                                        staticAlreadySkidding.writeU8(Number(internal.staticAlreadySkidding));
+                                    oneTickInjected = true;
+                                }} catch (_) {{}}
+                            }}
+                        }}
                         frame++; processCalls++;
                         const key = vehicle.toString();
                         controlStates.set(key, {{
@@ -211,10 +267,23 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             applyForces:[],
                             applyTurnForces:[],
                             collisionAlternates:[],
+                            activeRows:[],
                         }});
                         pendingCollisions.delete(key);
                         this.nativeControlKey = key;
+                        this.nativeControlVehicle = vehicle;
                     }}
+                }} catch(_) {{}}
+            }},
+            onLeave() {{
+                const key = this.nativeControlKey;
+                if (!key) return;
+                try {{
+                    const control = controlStates.get(key);
+                    if (!control) return;
+                    const exit = physicalSnapshot(this.nativeControlVehicle || this.context.ecx);
+                    control.controlExit = exit;
+                    for (const record of control.activeRows || []) record.controlExit = exit;
                 }} catch(_) {{}}
             }},
         }});
@@ -420,9 +489,12 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
                     controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces,applyTurnForces:c.applyTurnForces,collisionAlternates:c.collisionAlternates}} : null;}})(),
+                    controlExit:null,
                     linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular,
                     staticAlreadySkiddingBefore:INSTALL_STATIC_SKID_DIAGNOSTICS ? u8(staticAlreadySkidding) : null
                 }};
+                const control = controlStates.get(vehicle.toString());
+                if (control) control.activeRows.push(this.nativeRecord);
                 wheelCalls++;
             }},
             onLeave() {{
@@ -632,6 +704,121 @@ def _prepare_native_capture_output(mta_bin: Path, output_name: str) -> Any:
     return restore
 
 
+def _lua_literal(value: Any) -> str:
+    if value is None:
+        return "nil"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, list):
+        return "{" + ",".join(_lua_literal(item) for item in value) + "}"
+    if isinstance(value, dict):
+        return "{" + ",".join(
+            "[" + _lua_literal(str(key)) + "]=" + _lua_literal(item)
+            for key, item in value.items()
+        ) + "}"
+    raise TypeError(f"unsupported one-tick Lua value: {type(value)!r}")
+
+
+def _prepare_one_tick_resource(mta_bin: Path, config: dict[str, Any]) -> Any:
+    """Temporarily make native_capture initialize one public GTA state once.
+
+    This deliberately bypasses TAS playback.  The client writes the supplied
+    state and controls once, then leaves GTA to process naturally.  The native
+    stream is therefore a one-tick state-input diagnostic, not a continuous
+    trajectory.
+    """
+    resource = mta_bin / "server" / "mods" / "deathmatch" / "resources" / "native_capture"
+    server_path = resource / "server.lua"
+    client_path = resource / "client.lua"
+    if not server_path.exists() or not client_path.exists():
+        return lambda: None
+    original_server = server_path.read_bytes()
+    original_client = client_path.read_bytes()
+    encoded = _lua_literal(config)
+    server = original_server.decode("utf-8")
+    client = original_client.decode("utf-8")
+    marker = '    triggerClientEvent(player, "nativeCapture:start", resourceRoot, "etnies-native", "native-etnies")'
+    replacement = (
+        "    setTimer(function()\n"
+        "        if isElement(player) then\n"
+        "            triggerClientEvent(player, \"nativeCapture:oneTick\", resourceRoot, oneTickConfig)\n"
+        "        end\n"
+        "    end, 1000, 1)"
+    )
+    if server.count(marker) != 1:
+        return lambda: None
+    server = (
+        "local oneTickConfig = " + encoded + "\n" +
+        server.replace(marker, replacement, 1)
+    )
+    client += r'''
+
+local oneTickPending = nil
+local function applyOneTickState()
+    local vehicle = getPedOccupiedVehicle(localPlayer)
+    if not vehicle then return end
+    local config = oneTickPending
+    if type(config) ~= "table" then
+        removeEventHandler("onClientPreRender", root, applyOneTickState)
+        return
+    end
+    oneTickPending = nil
+    removeEventHandler("onClientPreRender", root, applyOneTickState)
+    local function vec(value)
+        return type(value) == "table" and value[1] and value[2] and value[3]
+    end
+    if vec(config.position) then
+        setElementPosition(vehicle, config.position[1], config.position[2], config.position[3])
+    end
+    if vec(config.rotation) then
+        setElementRotation(vehicle, config.rotation[1], config.rotation[2], config.rotation[3])
+    end
+    if vec(config.velocity) then
+        setElementVelocity(vehicle, config.velocity[1], config.velocity[2], config.velocity[3])
+    end
+    if vec(config.angularVelocity) then
+        setElementAngularVelocity(vehicle, config.angularVelocity[1], config.angularVelocity[2], config.angularVelocity[3])
+    end
+    local controls = config.controls or {}
+    local names = {"accelerate", "brake_reverse", "vehicle_left", "vehicle_right", "handbrake", "steer_forward", "steer_back", "vehicle_fire", "vehicle_secondary_fire"}
+    for _, name in ipairs(names) do
+        setPedControlState(localPlayer, name, controls[name] == true)
+    end
+    local analog = config.analogControls or {}
+    for _, name in ipairs({"vehicle_left", "vehicle_right", "steer_forward", "steer_back"}) do
+        local value = tonumber(analog[name]) or 0
+        setAnalogControlState(name, value, value ~= 0)
+    end
+    if config.nitro then
+        if getVehicleUpgradeOnSlot(vehicle, 8) == 0 then addVehicleUpgrade(vehicle, 1010) end
+        setVehicleNitroCount(vehicle, tonumber(config.nitro.count) or 100)
+        setVehicleNitroLevel(vehicle, tonumber(config.nitro.level) or 1)
+        setVehicleNitroActivated(vehicle, config.nitro.active == true)
+    end
+end
+addEvent("nativeCapture:oneTick", true)
+addEventHandler("nativeCapture:oneTick", resourceRoot, function(config)
+    oneTickPending = config
+    removeEventHandler("onClientPreRender", root, applyOneTickState)
+    addEventHandler("onClientPreRender", root, applyOneTickState, true, "high+100")
+end)
+'''
+    server_path.write_text(server, encoding="utf-8")
+    client_path.write_text(client, encoding="utf-8")
+
+    def restore() -> None:
+        server_path.write_bytes(original_server)
+        client_path.write_bytes(original_client)
+
+    return restore
+
+
 def _prepare_real_vorbis(mta_bin: Path) -> Any:
     """Temporarily disable the loader proxy so Frida owns MTA bootstrap."""
     original = mta_bin / "vorbisfile.dll"
@@ -705,6 +892,14 @@ def main() -> int:
         help="temporarily disable recorded pose/velocity playback and apply only recorded controls",
     )
     parser.add_argument(
+        "--one-tick-config",
+        type=Path,
+        help=(
+            "JSON public-state/control input for a one-tick diagnostic; bypasses TAS playback, "
+            "writes the state once, and leaves GTA running naturally"
+        ),
+    )
+    parser.add_argument(
         "--pose-only-playback",
         action="store_true",
         help=(
@@ -753,6 +948,11 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--cpp-static-skid-diagnostics",
+        action="store_true",
+        help="enable the C++ direct read of bAlreadySkidding at 0xC1CDAC",
+    )
+    parser.add_argument(
         "--timing-only",
         action="store_true",
         help="run the automated playback with no ProcessWheel hook and report timer samples",
@@ -779,6 +979,7 @@ def main() -> int:
             args.controls_only_playback,
             args.pose_only_playback,
             args.pose_linear_only_playback,
+            args.one_tick_config,
         )
     )
     if playback_modes > 1:
@@ -789,8 +990,19 @@ def main() -> int:
         parser.error("--cpp-hook and --timing-only are mutually exclusive")
     if args.static_skid_diagnostics and (args.cpp_hook or args.timing_only):
         parser.error("--static-skid-diagnostics requires the Frida ProcessWheel route")
+    if args.cpp_static_skid_diagnostics and not args.cpp_hook:
+        parser.error("--cpp-static-skid-diagnostics requires --cpp-hook")
     if args.playback_output_name and not args.playback_output_name.replace("-", "").replace("_", "").isalnum():
         parser.error("--playback-output-name may contain only letters, numbers, '-' and '_'")
+    one_tick_config: dict[str, Any] | None = None
+    if args.one_tick_config:
+        try:
+            loaded = json.loads(args.one_tick_config.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"could not read --one-tick-config: {exc}")
+        if not isinstance(loaded, dict):
+            parser.error("--one-tick-config must contain a JSON object")
+        one_tick_config = loaded
     _kill_targets()
     mta_bin = args.mta_bin.resolve()
     cpp_binary = args.output.with_suffix(args.output.suffix + ".cpp.bin")
@@ -809,6 +1021,8 @@ def main() -> int:
             os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_MINIMAL"] = "1"
         if args.cpp_no_matrix:
             os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_NO_MATRIX"] = "1"
+        if args.cpp_static_skid_diagnostics:
+            os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_STATIC_LATCH"] = "1"
         if args.collision_diagnostics:
             if cpp_collision_binary.exists():
                 cpp_collision_binary.unlink()
@@ -827,6 +1041,10 @@ def main() -> int:
     restore_controls_only = (
         _prepare_controls_only_playback(mta_bin)
         if args.controls_only_playback else (lambda: None)
+    )
+    restore_one_tick = (
+        _prepare_one_tick_resource(mta_bin, one_tick_config)
+        if one_tick_config is not None else (lambda: None)
     )
     restore_capture_output = (
         _prepare_native_capture_output(mta_bin, args.playback_output_name)
@@ -872,7 +1090,8 @@ def main() -> int:
         ),
         "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
-        "static_skid_diagnostics": bool(args.static_skid_diagnostics),
+        "static_skid_diagnostics": bool(args.static_skid_diagnostics or args.cpp_static_skid_diagnostics),
+        "cpp_static_skid_diagnostics": bool(args.cpp_static_skid_diagnostics),
         "cpp_capture_level": (
             "minimal" if args.cpp_minimal
             else "no-matrix" if args.cpp_no_matrix
@@ -883,6 +1102,8 @@ def main() -> int:
         "pose_only_playback": bool(args.pose_only_playback),
         "pose_linear_only_playback": bool(args.pose_linear_only_playback),
         "playback_output_name": args.playback_output_name or "",
+        "one_tick_diagnostic": one_tick_config is not None,
+        "one_tick_config": one_tick_config or {},
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
     meta_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -915,6 +1136,7 @@ def main() -> int:
         install_wheel_hook=not (args.cpp_hook or args.timing_only),
         collision_diagnostics=args.collision_diagnostics,
         static_skid_diagnostics=args.static_skid_diagnostics,
+        one_tick_config=one_tick_config,
     )
     if args.orchestrator:
         if not args.orchestrator.exists():
@@ -938,6 +1160,9 @@ def main() -> int:
                 + ";\n"
                 "const INSTALL_STATIC_SKID_DIAGNOSTICS = "
                 + str(args.static_skid_diagnostics).lower()
+                + ";\n"
+                "const ONE_TICK_CONFIG = "
+                + json.dumps(one_tick_config or {}, separators=(",", ":"))
                 + ";\n"
                 + native_script[native_script.index(marker):]
             )
@@ -974,12 +1199,14 @@ def main() -> int:
             restore_pose_linear_only()
             restore_pose_only()
             restore_controls_only()
+            restore_one_tick()
             restore_capture_output()
             restore_registry()
             if args.cpp_hook:
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT", None)
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_MINIMAL", None)
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_NO_MATRIX", None)
+                os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_STATIC_LATCH", None)
                 os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_OUTPUT", None)
     print(f"native capture written to {args.output}")
     return 0
