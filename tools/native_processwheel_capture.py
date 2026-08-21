@@ -1457,7 +1457,7 @@ def main() -> int:
         capture_from_first_gas=args.capture_from_first_gas,
         one_tick_config=one_tick_config,
     )
-    if args.orchestrator:
+    if args.orchestrator and not (args.cpp_hook or args.timing_only):
         if not args.orchestrator.exists():
             parser.error(f"orchestrator does not exist: {args.orchestrator}")
         spec = importlib.util.spec_from_file_location("mta_native_bootstrap", args.orchestrator)
@@ -1466,29 +1466,31 @@ def main() -> int:
         bootstrap_module = importlib.util.module_from_spec(spec)
         sys.modules["mta_native_bootstrap"] = bootstrap_module
         spec.loader.exec_module(bootstrap_module)
-        if args.cpp_hook or args.timing_only:
-            native_script = bootstrap_module.build_frida_script(args.label) + "\n"
-            native_script += _timing_probe_script()
-        else:
-            marker = "if (INSTALL_NATIVE_WHEEL_HOOK) {"
-            native_only = (
-                "const OUTPUT_LABEL = " + json.dumps(args.label) + ";\n"
-                "const INSTALL_NATIVE_WHEEL_HOOK = true;\n"
-                "const INSTALL_COLLISION_DIAGNOSTICS = "
-                + str(args.collision_diagnostics).lower()
-                + ";\n"
-                "const INSTALL_STATIC_SKID_DIAGNOSTICS = "
-                + str(args.static_skid_diagnostics).lower()
-                + ";\n"
-                "const CAPTURE_FROM_FIRST_GAS = "
-                + str(args.capture_from_first_gas).lower()
-                + ";\n"
-                "const ONE_TICK_CONFIG = "
-                + json.dumps(one_tick_config or {}, separators=(",", ":"))
-                + ";\n"
-                + native_script[native_script.index(marker):]
-            )
-            native_script = bootstrap_module.build_frida_script(args.label) + "\n" + native_only
+        marker = "if (INSTALL_NATIVE_WHEEL_HOOK) {"
+        native_only = (
+            "const OUTPUT_LABEL = " + json.dumps(args.label) + ";\n"
+            "const INSTALL_NATIVE_WHEEL_HOOK = true;\n"
+            "const INSTALL_COLLISION_DIAGNOSTICS = "
+            + str(args.collision_diagnostics).lower()
+            + ";\n"
+            "const INSTALL_STATIC_SKID_DIAGNOSTICS = "
+            + str(args.static_skid_diagnostics).lower()
+            + ";\n"
+            "const CAPTURE_FROM_FIRST_GAS = "
+            + str(args.capture_from_first_gas).lower()
+            + ";\n"
+            "const ONE_TICK_CONFIG = "
+            + json.dumps(one_tick_config or {}, separators=(",", ":"))
+            + ";\n"
+            + native_script[native_script.index(marker):]
+        )
+        native_script = bootstrap_module.build_frida_script(args.label) + "\n" + native_only
+    elif args.cpp_hook or args.timing_only:
+        # The optional orchestrator's larger bootstrap payload is useful for
+        # the Frida wheel route, but it can stall the client before the TAS
+        # resource starts when combined with the lower-overhead C++ hook.  The
+        # self-contained bootstrap above is sufficient for these routes.
+        native_script += "\n" + _timing_probe_script()
     script = session.create_script(native_script)
     script.on("message", on_message)
     script.load()

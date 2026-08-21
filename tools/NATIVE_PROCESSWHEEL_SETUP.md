@@ -62,7 +62,10 @@ route; convert its sibling `.cpp.bin` file with
 accepts the current 354-byte rows and the earlier 294/326-byte row formats.
 The default Frida route remains available for cross-checking. `--timing-only` runs the
 same automated playback without either ProcessWheel hook and reports timer
-samples, providing a no-hook timing control. The optional
+samples, providing a no-hook timing control. For `--cpp-hook` and
+`--timing-only`, the harness deliberately uses its small self-contained bootstrap
+instead of the optional large orchestrator payload: the latter can leave the
+client stalled before TAS playback starts. The optional
 `--collision-diagnostics` flag adds read-only `ProcessCollision`,
 `ProcessEntityCollision` (`0x6ACE70`), `ProcessSuspension` (`0x6AFB10`),
 `CheckCollision`, `ProcessControlCollisionCheck`, `ApplyForce`,
