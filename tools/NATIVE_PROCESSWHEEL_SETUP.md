@@ -34,7 +34,7 @@ vehicles do not contaminate the Infernus stream.
    timer cadence. The validated local server also disabled anti-cheats `4,56`
    because the debug client was rejected by those checks.
 
-The tool's `--prepare-registry` and `--use-real-vorbis` options temporarily
+The tool's `--prepare-registry`, `--prepare-tas-folder`, and `--use-real-vorbis` options temporarily
 point the 32-bit MTA registry location at the debug tree and replace the
 `vorbisfile.dll` loader proxy with the local `vorbisfile_real.dll`. Both are
 restored in the cleanup path. A local orchestrator script may be passed with
@@ -69,7 +69,7 @@ python tools/native_processwheel_capture.py `
   --server-exe "D:\Users\Bernardo\Documents\mtasa-blue\Bin\server\MTA Server_d.exe" `
   --start-resource tas --start-resource native_capture `
   --orchestrator "C:\Users\berna\mtasa_deobfuscation\mta_bytecode_orchestrator.py" `
-  --prepare-registry --use-real-vorbis `
+  --prepare-registry --prepare-tas-folder --use-real-vorbis `
   --output "..\infernus-physics\generated\native-processwheel.jsonl"
 ```
 

@@ -351,6 +351,23 @@ def _prepare_registry(mta_bin: Path) -> Any:
     return restore
 
 
+def _prepare_public_tas_folder(mta_bin: Path) -> Any:
+    """Temporarily make the local TAS resource use its public saves folder."""
+    client = mta_bin / "server" / "mods" / "deathmatch" / "resources" / "tas" / "client.lua"
+    if not client.exists():
+        return lambda: None
+    original = client.read_bytes()
+    marker = b"usePrivateFolder = true"
+    if marker not in original:
+        return lambda: None
+    client.write_bytes(original.replace(marker, b"usePrivateFolder = false", 1))
+
+    def restore() -> None:
+        client.write_bytes(original)
+
+    return restore
+
+
 def _prepare_real_vorbis(mta_bin: Path) -> Any:
     """Temporarily disable the loader proxy so Frida owns MTA bootstrap."""
     original = mta_bin / "vorbisfile.dll"
@@ -414,6 +431,11 @@ def main() -> int:
         help="temporarily point HKLM's 32-bit MTA 1.6 Last Run Location at --mta-bin",
     )
     parser.add_argument(
+        "--prepare-tas-folder",
+        action="store_true",
+        help="temporarily use the TAS resource's public saves folder for automated local playback",
+    )
+    parser.add_argument(
         "--use-real-vorbis",
         action="store_true",
         help="temporarily replace mtasa-blue's vorbisfile loader proxy with vorbisfile_real.dll",
@@ -457,6 +479,7 @@ def main() -> int:
         os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT"] = str(cpp_binary.resolve())
     os.environ["MTA_BIN"] = str(mta_bin)
     restore_registry = _prepare_registry(mta_bin) if args.prepare_registry else (lambda: None)
+    restore_tas_folder = _prepare_public_tas_folder(mta_bin) if args.prepare_tas_folder else (lambda: None)
     restore_vorbis = _prepare_real_vorbis(mta_bin) if args.use_real_vorbis else (lambda: None)
     server = None
     if args.server_exe:
@@ -489,6 +512,7 @@ def main() -> int:
         "cpp_binary": str(cpp_binary.resolve()) if args.cpp_hook else "",
         "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
+        "prepare_tas_folder": bool(args.prepare_tas_folder),
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
     meta_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -572,6 +596,7 @@ def main() -> int:
         try:
             restore_vorbis()
         finally:
+            restore_tas_folder()
             restore_registry()
             if args.cpp_hook:
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT", None)

@@ -115,7 +115,7 @@ python tools/native_processwheel_capture.py `
   --server-exe "D:\\Users\\Bernardo\\Documents\\mtasa-blue\\Bin\\server\\MTA Server_d.exe" `
   --start-resource tas --start-resource native_capture `
   --orchestrator "C:\\Users\\berna\\mtasa_deobfuscation\\mta_bytecode_orchestrator.py" `
-  --prepare-registry --use-real-vorbis `
+  --prepare-registry --prepare-tas-folder --use-real-vorbis `
   --output "..\\infernus-physics\\generated\\native-processwheel.jsonl"
 
 python ..\\infernus-physics\\tools\\align_native_processwheel.py `
