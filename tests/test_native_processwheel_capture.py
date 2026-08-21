@@ -102,6 +102,39 @@ def test_tas_automation_playback_replaces_native_event_and_restores(tmp_path):
     assert path.read_bytes() == original
 
 
+def test_gta_import_redirects_and_restores(tmp_path):
+    tool = _load_tool()
+    path = tmp_path / "gta_sa.exe"
+    original = b"prefixWINMM.dllsuffix"
+    path.write_bytes(original)
+
+    restore = tool._prepare_gta_import(path)
+
+    assert path.read_bytes() == b"prefixmtasa.dllsuffix"
+    assert (tmp_path / "gta_sa.exe.native-capture-original").read_bytes() == original
+    restore()
+    assert path.read_bytes() == original
+
+    path.write_bytes(b"prefixWINMM.dllmiddleWINMM.dllsuffix")
+    restore = tool._prepare_gta_import(path)
+    assert path.read_bytes() == b"prefixmtasa.dllmiddleWINMM.dllsuffix"
+    restore()
+    assert path.read_bytes() == b"prefixWINMM.dllmiddleWINMM.dllsuffix"
+
+
+def test_real_vorbis_recovers_stale_real_dll_from_backup(tmp_path):
+    tool = _load_tool()
+    (tmp_path / "vorbisfile.dll").write_bytes(b"real")
+    (tmp_path / "vorbisfile_real.dll").write_bytes(b"real")
+    (tmp_path / "vorbisfile.native-capture-original.dll").write_bytes(b"proxy")
+
+    restore = tool._prepare_real_vorbis(tmp_path)
+
+    assert (tmp_path / "vorbisfile.dll").read_bytes() == b"proxy"
+    restore()
+    assert (tmp_path / "vorbisfile.dll").read_bytes() == b"proxy"
+
+
 def test_native_capture_start_delay_handles_crlf_and_restores(tmp_path):
     tool = _load_tool()
     resource = (

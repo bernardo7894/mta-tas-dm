@@ -34,10 +34,13 @@ vehicles do not contaminate the Infernus stream.
    timer cadence. The validated local server also disabled anti-cheats `4,56`
    because the debug client was rejected by those checks.
 
-The tool's `--prepare-registry`, `--prepare-tas-folder`, `--controls-only-playback`, `--playback-output-name`, and `--use-real-vorbis` options temporarily
-point the 32-bit MTA registry location at the debug tree and replace the
-`vorbisfile.dll` loader proxy with the local `vorbisfile_real.dll`. Both are
-restored in the cleanup path. Use `--tas-automation-playback` when the ordinary
+The tool's `--prepare-registry`, `--prepare-gta-import`, `--prepare-tas-folder`, `--controls-only-playback`, `--playback-output-name`, and `--use-real-vorbis` options temporarily
+point the 32-bit MTA registry location at the debug tree, redirect the
+GTA `WINMM.dll` import to the local `mtasa.dll` loader proxy, and replace the
+`vorbisfile.dll` loader proxy with the local `vorbisfile_real.dll`. Both
+binary changes are restored in the cleanup path. Without
+`--prepare-gta-import`, direct spawning of an unpatched executable can show
+“MTA: Unable to find winmm.dll import entry.” Use `--tas-automation-playback` when the ordinary
 `native_capture:start` client event is lost during resource startup; it
 triggers the TAS resource-root automation event directly while preserving the
 same controls-only playback and source-frame tagging path. The
@@ -128,7 +131,7 @@ python tools/native_processwheel_capture.py `
   --mta-bin "D:\Users\Bernardo\Documents\mtasa-blue\Bin" `
   --server-exe "D:\Users\Bernardo\Documents\mtasa-blue\Bin\server\MTA Server_d.exe" `
   --start-resource tas --start-resource native_capture `
-  --tas-automation-playback `
+  --tas-automation-playback --prepare-gta-import `
   --orchestrator "C:\Users\berna\mtasa_deobfuscation\mta_bytecode_orchestrator.py" `
   --prepare-registry --prepare-tas-folder --controls-only-playback --playback-output-name native-etnies-auto --use-real-vorbis `
   --output "..\infernus-physics\generated\native-processwheel.jsonl"

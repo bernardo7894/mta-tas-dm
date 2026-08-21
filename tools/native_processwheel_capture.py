@@ -789,6 +789,43 @@ def _kill_targets() -> None:
                 pass
 
 
+def _prepare_gta_import(gta_exe: Path) -> Any:
+    """Temporarily redirect GTA's WINMM import to the local MTA loader proxy.
+
+    The Debug capture launches ``gta_sa.exe`` directly.  The MTA loader proxy
+    expects the executable's import descriptor to be renamed from
+    ``WINMM.dll`` to ``mtasa.dll``; the normal launcher normally performs this
+    patch, but a direct Frida spawn does not.  The original bytes are restored
+    in the cleanup path and a side-by-side backup is kept for interrupted runs.
+    """
+    if not gta_exe.exists():
+        return lambda: None
+    original = gta_exe.read_bytes()
+    before = b"WINMM.dll"
+    after = b"mtasa.dll"
+    if before in original:
+        # The US 1.0 executable also contains the literal in its PDB/debug
+        # string.  The first occurrence is the import-descriptor name, which
+        # is the same entry selected by mtasa-blue's LibraryRedirectionPatch.
+        backup = gta_exe.with_name(gta_exe.name + ".native-capture-original")
+        if not backup.exists():
+            backup.write_bytes(original)
+        offset = original.find(before)
+        patched = original[:offset] + after + original[offset + len(before):]
+        gta_exe.write_bytes(patched)
+    elif after in original:
+        # Already redirected; direct capture can proceed without taking
+        # ownership of restoration.
+        return lambda: None
+    else:
+        return lambda: None
+
+    def restore() -> None:
+        gta_exe.write_bytes(original)
+
+    return restore
+
+
 def _prepare_registry(mta_bin: Path) -> Any:
     """Temporarily point the 32-bit MTA registry path at the debug tree."""
     import winreg
@@ -1145,10 +1182,22 @@ def _prepare_real_vorbis(mta_bin: Path) -> Any:
     original = mta_bin / "vorbisfile.dll"
     real = mta_bin / "vorbisfile_real.dll"
     backup = mta_bin / "vorbisfile.native-capture-original.dll"
-    if not original.exists() or not real.exists() or original.read_bytes() == real.read_bytes():
+    if not original.exists() or not real.exists():
+        return lambda: None
+    original_bytes = original.read_bytes()
+    real_bytes = real.read_bytes()
+    if original_bytes == real_bytes:
+        # A previous interrupted/older run may have left the real DLL in the
+        # proxy path.  If our diagnostic backup is available, restore it
+        # before returning; otherwise a later MTA launch can fail before its
+        # client log is initialized.
+        if backup.exists():
+            backup_bytes = backup.read_bytes()
+            if backup_bytes != real_bytes:
+                original.write_bytes(backup_bytes)
         return lambda: None
     if not backup.exists():
-        backup.write_bytes(original.read_bytes())
+        backup.write_bytes(original_bytes)
     original.write_bytes(real.read_bytes())
 
     def restore() -> None:
@@ -1187,6 +1236,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gta-exe", type=Path, default=Path(os.environ.get("MTA_GTA_EXE", "gta_sa.exe")))
     parser.add_argument("--mta-bin", type=Path, default=Path(os.environ.get("MTA_BIN", ".")))
+    parser.add_argument(
+        "--prepare-gta-import",
+        action="store_true",
+        help="temporarily rename GTA's WINMM.dll import to mtasa.dll for direct loader-proxy spawning",
+    )
     parser.add_argument("--server-exe", type=Path)
     parser.add_argument("--start-resource", action="append", default=[])
     parser.add_argument(
@@ -1456,8 +1510,15 @@ def main() -> int:
 
     device = frida.get_local_device()
     gta = args.gta_exe.resolve()
-    pid = device.spawn(str(gta), argv=[str(gta)], cwd=str(gta.parent))
-    session = device.attach(pid)
+    restore_gta_import = (
+        _prepare_gta_import(gta) if args.prepare_gta_import else (lambda: None)
+    )
+    try:
+        pid = device.spawn(str(gta), argv=[str(gta)], cwd=str(gta.parent))
+        session = device.attach(pid)
+    except Exception:
+        restore_gta_import()
+        raise
     args.output.parent.mkdir(parents=True, exist_ok=True)
     metadata = {
         "format": "gta-native-pre-processwheel-capture",
@@ -1465,6 +1526,7 @@ def main() -> int:
         "label": args.label,
         "gta_executable": str(gta),
         "mta_bin": str(args.mta_bin.resolve()),
+        "prepare_gta_import": bool(args.prepare_gta_import),
         "process_wheel_va": hex(IMAGE_BASE + PROCESS_WHEEL_RVA),
         "process_wheel_rva": hex(PROCESS_WHEEL_RVA),
         "direct_observable": "CVehicle::ProcessWheel entry arguments and vehicle state",
@@ -1621,6 +1683,7 @@ def main() -> int:
             restore_capture_output()
             restore_tas_automation()
             restore_capture_start_delay()
+            restore_gta_import()
             restore_registry()
             if args.cpp_hook:
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT", None)
