@@ -965,6 +965,14 @@ def main() -> int:
     parser.add_argument("--server-exe", type=Path)
     parser.add_argument("--start-resource", action="append", default=[])
     parser.add_argument(
+        "--server-command-after",
+        action="append",
+        nargs=2,
+        metavar=("SECONDS", "COMMAND"),
+        default=[],
+        help="send a server-console command after startup delay; repeatable diagnostic hook",
+    )
+    parser.add_argument(
         "--orchestrator",
         type=Path,
         help=(
@@ -1090,6 +1098,15 @@ def main() -> int:
         parser.error("--cpp-static-skid-diagnostics requires --cpp-hook")
     if args.playback_output_name and not args.playback_output_name.replace("-", "").replace("_", "").isalnum():
         parser.error("--playback-output-name may contain only letters, numbers, '-' and '_'")
+    server_commands_after: list[tuple[float, str]] = []
+    for raw_delay, command in args.server_command_after:
+        try:
+            delay = float(raw_delay)
+        except ValueError:
+            parser.error(f"invalid --server-command-after delay: {raw_delay!r}")
+        if delay < 0.0 or not command.strip():
+            parser.error("--server-command-after requires a non-negative delay and command")
+        server_commands_after.append((delay, command))
     one_tick_config: dict[str, Any] | None = None
     if args.one_tick_config:
         try:
@@ -1148,11 +1165,26 @@ def main() -> int:
     )
     restore_vorbis = _prepare_real_vorbis(mta_bin) if args.use_real_vorbis else (lambda: None)
     server = None
+    server_command_timers: list[threading.Timer] = []
     if args.server_exe:
         server, _ = _start_server(
             args.server_exe.resolve(),
             ["refresh", *[f"start {name}" for name in args.start_resource]],
         )
+        for delay, command in server_commands_after:
+            def send_command(command: str = command) -> None:
+                if server is None or server.poll() is not None or server.stdin is None:
+                    return
+                try:
+                    server.stdin.write(command + "\r\n")
+                    server.stdin.flush()
+                    print(f"[server-cmd-after] {command}")
+                except OSError as exc:
+                    print(f"[server-cmd-after-error] {command}: {exc}")
+            timer = threading.Timer(delay, send_command)
+            timer.daemon = True
+            timer.start()
+            server_command_timers.append(timer)
 
     device = frida.get_local_device()
     gta = args.gta_exe.resolve()
@@ -1200,6 +1232,10 @@ def main() -> int:
         "playback_output_name": args.playback_output_name or "",
         "one_tick_diagnostic": one_tick_config is not None,
         "one_tick_config": one_tick_config or {},
+        "server_commands_after": [
+            {"delay_s": delay, "command": command}
+            for delay, command in server_commands_after
+        ],
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
     meta_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -1270,6 +1306,8 @@ def main() -> int:
     try:
         time.sleep(max(0.0, args.duration))
     finally:
+        for timer in server_command_timers:
+            timer.cancel()
         # Kill first: a Frida session with a busy callback queue can block
         # indefinitely while detaching from the debug client.
         try:
@@ -1283,7 +1321,7 @@ def main() -> int:
         if server is not None and server.poll() is None:
             try:
                 if server.stdin is not None:
-                    server.stdin.write("shutdown\n")
+                    server.stdin.write("shutdown\r\n")
                     server.stdin.flush()
                 server.wait(timeout=10)
             except Exception:
