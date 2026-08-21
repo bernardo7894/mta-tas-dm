@@ -341,7 +341,7 @@ def main() -> int:
         "gta_executable": str(gta),
         "mta_bin": str(args.mta_bin.resolve()),
         "process_wheel_va": hex(IMAGE_BASE + PROCESS_WHEEL_RVA),
-        "process_wheel_rva": hex(PROCESS_WHEEL_RVA - IMAGE_BASE),
+        "process_wheel_rva": hex(PROCESS_WHEEL_RVA),
         "direct_observable": "CVehicle::ProcessWheel entry arguments and vehicle state",
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
