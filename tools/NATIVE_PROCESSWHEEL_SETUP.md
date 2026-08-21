@@ -37,7 +37,10 @@ vehicles do not contaminate the Infernus stream.
 The tool's `--prepare-registry`, `--prepare-tas-folder`, `--controls-only-playback`, `--playback-output-name`, and `--use-real-vorbis` options temporarily
 point the 32-bit MTA registry location at the debug tree and replace the
 `vorbisfile.dll` loader proxy with the local `vorbisfile_real.dll`. Both are
-restored in the cleanup path. A local orchestrator script may be passed with
+restored in the cleanup path. The `--server-command-after 45 "restart
+native_capture"` option can schedule a same-process resource/vehicle restart
+from the server console for lifecycle captures; it uses the console's CRLF
+protocol and is cancelled during cleanup. A local orchestrator script may be passed with
 `--orchestrator` to reuse its tested Frida survival/bootstrap hooks.
 
 ## Lower-overhead C++ hook
