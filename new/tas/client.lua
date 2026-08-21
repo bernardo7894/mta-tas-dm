@@ -332,6 +332,8 @@ local setElementVelocity = setElementVelocity
 local setElementAngularVelocity = setElementAngularVelocity
 local setElementHealth = setElementHealth
 local setElementModel = setElementModel
+-- Optional Debug mtasa-blue bridge; production MTA clients leave this nil.
+local setNativeProcessWheelSourceTag = _G["setNativeProcessWheelSourceTag"]
 
 local getKeyState = getKeyState
 local getPedControlState = getPedControlState
@@ -2706,6 +2708,13 @@ function tas.render_playback(deltaTime)
 		
 		local frame_data = tas.data[tas.var.play_frame]
 		local frame_data_next = tas.data[tas.var.play_frame+1] or frame_data
+
+		-- Diagnostic only: tag native ProcessWheel rows with the TAS source
+		-- frame/control tick currently being applied.  This does not alter
+		-- playback state or physics and is absent on production MTA clients.
+		if setNativeProcessWheelSourceTag then
+			setNativeProcessWheelSourceTag(tas.var.play_frame, frame_data.tick)
+		end
 		
 		if not tas.settings.useOnlyBinds then
 		

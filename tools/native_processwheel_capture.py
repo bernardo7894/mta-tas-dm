@@ -1439,6 +1439,7 @@ def main() -> int:
         "static_skid_diagnostics": bool(args.static_skid_diagnostics or args.cpp_static_skid_diagnostics),
         "capture_from_first_gas": bool(args.capture_from_first_gas),
         "cpp_static_skid_diagnostics": bool(args.cpp_static_skid_diagnostics),
+        "cpp_source_frame_tagging": bool(args.cpp_hook),
         "cpp_capture_level": (
             "minimal" if args.cpp_minimal
             else "no-matrix" if args.cpp_no_matrix
