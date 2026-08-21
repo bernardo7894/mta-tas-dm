@@ -37,7 +37,11 @@ vehicles do not contaminate the Infernus stream.
 The tool's `--prepare-registry`, `--prepare-tas-folder`, `--controls-only-playback`, `--playback-output-name`, and `--use-real-vorbis` options temporarily
 point the 32-bit MTA registry location at the debug tree and replace the
 `vorbisfile.dll` loader proxy with the local `vorbisfile_real.dll`. Both are
-restored in the cleanup path. The `--server-command-after 45 "restart
+restored in the cleanup path. Use `--tas-automation-playback` when the ordinary
+`native_capture:start` client event is lost during resource startup; it
+triggers the TAS resource-root automation event directly while preserving the
+same controls-only playback and source-frame tagging path. The
+`--server-command-after 45 "restart
 native_capture"` option can schedule a same-process resource/vehicle restart
 from the server console for lifecycle captures; it uses the console's CRLF
 protocol and is cancelled during cleanup. A local orchestrator script may be passed with
@@ -124,6 +128,7 @@ python tools/native_processwheel_capture.py `
   --mta-bin "D:\Users\Bernardo\Documents\mtasa-blue\Bin" `
   --server-exe "D:\Users\Bernardo\Documents\mtasa-blue\Bin\server\MTA Server_d.exe" `
   --start-resource tas --start-resource native_capture `
+  --tas-automation-playback `
   --orchestrator "C:\Users\berna\mtasa_deobfuscation\mta_bytecode_orchestrator.py" `
   --prepare-registry --prepare-tas-folder --controls-only-playback --playback-output-name native-etnies-auto --use-real-vorbis `
   --output "..\infernus-physics\generated\native-processwheel.jsonl"

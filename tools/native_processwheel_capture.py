@@ -950,6 +950,45 @@ def _prepare_native_capture_output(mta_bin: Path, output_name: str) -> Any:
     return restore
 
 
+def _prepare_tas_automation_playback(mta_bin: Path, output_name: str) -> Any:
+    """Trigger TAS playback from the TAS resource root, bypassing native_capture's client event.
+
+    Some local MTA resource-start orders can deliver the vehicle creation but
+    not the diagnostic native_capture client event.  The TAS automation event
+    is already designed to wait for the occupied vehicle and calls the same
+    playback callback that writes source-frame tags.
+    """
+    server = (
+        mta_bin / "server" / "mods" / "deathmatch" / "resources"
+        / "native_capture" / "server.lua"
+    )
+    if not server.exists():
+        return lambda: None
+    original = server.read_bytes()
+    newline = b"\r\n" if b"\r\n" in original else b"\n"
+    marker = (
+        '    triggerClientEvent(player, "nativeCapture:start", resourceRoot, '
+        '"etnies-native", "native-etnies")'
+    ).encode("ascii")
+    if original.count(marker) != 1:
+        return lambda: None
+    replacement = (
+        "    local tasResource = getResourceFromName(\"tas\")\n"
+        "    if tasResource and getResourceState(tasResource) == \"running\" then\n"
+        "        triggerClientEvent(player, \"tas:automationStart\", "
+        "getResourceRootElement(tasResource), 1, \"etnies-native\", "
+        + json.dumps(output_name)
+        + ")\n"
+        "    end"
+    ).replace("\n", newline.decode("ascii")).encode("ascii")
+    server.write_bytes(original.replace(marker, replacement, 1))
+
+    def restore() -> None:
+        server.write_bytes(original)
+
+    return restore
+
+
 def _prepare_native_capture_start_delay(mta_bin: Path, delay_ms: int) -> Any:
     """Temporarily delay source playback so the native timer can warm up."""
     client = (
@@ -1277,6 +1316,14 @@ def main() -> int:
         default=1000,
         help="delay source playback after vehicle setup; use 30000 for a warm native timer window",
     )
+    parser.add_argument(
+        "--tas-automation-playback",
+        action="store_true",
+        help=(
+            "trigger TAS playback through its server automation event instead of "
+            "native_capture's client event; useful when resource-start ordering drops that event"
+        ),
+    )
     args = parser.parse_args()
     if args.cpp_minimal or args.cpp_no_matrix:
         args.cpp_hook = True
@@ -1372,9 +1419,14 @@ def main() -> int:
         _prepare_one_tick_resource(mta_bin, one_tick_config)
         if one_tick_config is not None else (lambda: None)
     )
+    playback_output_name = args.playback_output_name or "native-etnies"
     restore_capture_output = (
         _prepare_native_capture_output(mta_bin, args.playback_output_name)
-        if args.playback_output_name else (lambda: None)
+        if args.playback_output_name and not args.tas_automation_playback else (lambda: None)
+    )
+    restore_tas_automation = (
+        _prepare_tas_automation_playback(mta_bin, playback_output_name)
+        if args.tas_automation_playback else (lambda: None)
     )
     restore_capture_start_delay = _prepare_native_capture_start_delay(
         mta_bin, args.playback_start_delay_ms
@@ -1449,8 +1501,9 @@ def main() -> int:
         "controls_only_playback": bool(args.controls_only_playback),
         "pose_only_playback": bool(args.pose_only_playback),
         "pose_linear_only_playback": bool(args.pose_linear_only_playback),
-        "playback_output_name": args.playback_output_name or "",
+        "playback_output_name": playback_output_name if args.tas_automation_playback else args.playback_output_name or "",
         "playback_start_delay_ms": args.playback_start_delay_ms,
+        "tas_automation_playback": bool(args.tas_automation_playback),
         "one_tick_diagnostic": one_tick_config is not None,
         "one_tick_config": one_tick_config or {},
         "server_commands_after": [
@@ -1566,6 +1619,7 @@ def main() -> int:
             restore_controls_only()
             restore_one_tick()
             restore_capture_output()
+            restore_tas_automation()
             restore_capture_start_delay()
             restore_registry()
             if args.cpp_hook:

@@ -79,6 +79,29 @@ def test_cpp_collision_stream_flushes_partial_batches():
     assert '"cpp_collision_flush_every"' in source
 
 
+def test_tas_automation_playback_replaces_native_event_and_restores(tmp_path):
+    tool = _load_tool()
+    resource = (
+        tmp_path / "server" / "mods" / "deathmatch" / "resources" / "native_capture"
+    )
+    resource.mkdir(parents=True)
+    original = (
+        'local vehicle = nil\r\n'
+        '    triggerClientEvent(player, "nativeCapture:start", resourceRoot, "etnies-native", "native-etnies")\r\n'
+    ).encode()
+    path = resource / "server.lua"
+    path.write_bytes(original)
+
+    restore = tool._prepare_tas_automation_playback(tmp_path, "tagged-run")
+    prepared = path.read_bytes().decode()
+    assert '"tas:automationStart"' in prepared
+    assert 'getResourceRootElement(tasResource)' in prepared
+    assert '"tagged-run"' in prepared
+    assert "\r\n" in prepared
+    restore()
+    assert path.read_bytes() == original
+
+
 def test_native_capture_start_delay_handles_crlf_and_restores(tmp_path):
     tool = _load_tool()
     resource = (
