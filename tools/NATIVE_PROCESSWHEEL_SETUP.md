@@ -72,7 +72,10 @@ client stalled before TAS playback starts. The optional
 `ApplyTurnForce`, and `ApplyCollisionAlt` snapshots to the Frida route; it is
 intended for collision/source classification, not the minimal timing capture.
 The suspension snapshots include compression/count arrays and private wheel
-collision points before/after the source stage.
+collision points before/after the source stage. `--suspension-stage-only` is a
+Frida-only reduced mode that installs only the entity-collision and suspension
+stage hooks; its metadata records `suspension_stage_only: true`. It is still a
+forensic diagnostic and must pass the native timing gate before use.
 The recommended `--controls-only-playback` mode temporarily disables TAS pose,
 velocity, and angular-velocity playback and applies only recorded controls.
 Without it, legacy TAS playback imposes recorded state and native rows are

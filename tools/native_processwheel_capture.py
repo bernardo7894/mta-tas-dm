@@ -52,6 +52,7 @@ def _native_script(
     *,
     install_wheel_hook: bool = True,
     collision_diagnostics: bool = False,
+    suspension_stage_only: bool = False,
     static_skid_diagnostics: bool = False,
     capture_from_first_gas: bool = False,
     one_tick_config: dict[str, Any] | None = None,
@@ -65,6 +66,7 @@ const MTA_DIR = {mta_dir};
 const OUTPUT_LABEL = {_js_string(output_label)};
 const INSTALL_NATIVE_WHEEL_HOOK = {str(install_wheel_hook).lower()};
 const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
+const SUSPENSION_STAGE_ONLY = {str(suspension_stage_only).lower()};
 const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
 const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
 const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":"))};
@@ -439,6 +441,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                 }} catch(_) {{}}
             }}
         }});
+        if (!SUSPENSION_STAGE_ONLY) {{
         Interceptor.attach(processFriction, {{
             onEnter() {{
                 const vehicle = this.context.ecx;
@@ -668,6 +671,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                 }} catch(_) {{}}
             }}
         }});
+        }}
         }}
         Interceptor.attach(processWheel, {{
             onEnter() {{
@@ -1248,6 +1252,11 @@ def main() -> int:
         help="buffer native rows until the first nonzero gas/brake, avoiding warm-up IPC overhead",
     )
     parser.add_argument(
+        "--suspension-stage-only",
+        action="store_true",
+        help="with --collision-diagnostics, retain only ProcessEntityCollision/ProcessSuspension snapshots",
+    )
+    parser.add_argument(
         "--playback-output-name",
         help="temporarily select this Lua physics-output name in the local native_capture resource",
     )
@@ -1282,6 +1291,8 @@ def main() -> int:
         parser.error("--playback-output-name may contain only letters, numbers, '-' and '_'")
     if args.playback_start_delay_ms < 0:
         parser.error("--playback-start-delay-ms must be non-negative")
+    if args.suspension_stage_only and (not args.collision_diagnostics or args.cpp_hook or args.timing_only):
+        parser.error("--suspension-stage-only requires Frida --collision-diagnostics")
     server_commands_after: list[tuple[float, str]] = []
     for raw_delay, command in args.server_command_after:
         try:
@@ -1405,6 +1416,7 @@ def main() -> int:
         ),
         "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
+        "suspension_stage_only": bool(args.suspension_stage_only),
         "static_skid_diagnostics": bool(args.static_skid_diagnostics or args.cpp_static_skid_diagnostics),
         "capture_from_first_gas": bool(args.capture_from_first_gas),
         "cpp_static_skid_diagnostics": bool(args.cpp_static_skid_diagnostics),
@@ -1456,6 +1468,7 @@ def main() -> int:
         args.mta_bin.resolve(), args.label,
         install_wheel_hook=not (args.cpp_hook or args.timing_only),
         collision_diagnostics=args.collision_diagnostics,
+        suspension_stage_only=args.suspension_stage_only,
         static_skid_diagnostics=args.static_skid_diagnostics,
         capture_from_first_gas=args.capture_from_first_gas,
         one_tick_config=one_tick_config,
@@ -1475,6 +1488,9 @@ def main() -> int:
             "const INSTALL_NATIVE_WHEEL_HOOK = true;\n"
             "const INSTALL_COLLISION_DIAGNOSTICS = "
             + str(args.collision_diagnostics).lower()
+            + ";\n"
+            "const SUSPENSION_STAGE_ONLY = "
+            + str(args.suspension_stage_only).lower()
             + ";\n"
             "const INSTALL_STATIC_SKID_DIAGNOSTICS = "
             + str(args.static_skid_diagnostics).lower()

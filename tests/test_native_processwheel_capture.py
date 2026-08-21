@@ -59,6 +59,8 @@ def test_collision_diagnostics_capture_fresh_automobile_col_points():
     assert "outputCollisionPoints:colPointArray(this.nativeEntityCollisionOutput, 32)" in source
     assert "automobileCollisionPointsAfter:colPointArray(automobileCollisionPoints, 12)" in source
     assert "CAPTURE_FROM_FIRST_GAS" in source
+    assert "SUSPENSION_STAGE_ONLY" in source
+    assert "if (!SUSPENSION_STAGE_ONLY)" in source
     assert "maxPreCaptureRecords = 512" in source
 
 
