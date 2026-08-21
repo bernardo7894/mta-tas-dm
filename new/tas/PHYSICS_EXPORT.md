@@ -136,6 +136,8 @@ the local C++ matrix read is fault-guarded. `--pose-linear-only-playback` is a
 separate non-independent diagnostic mode that forces recorded position/rotation/
 linear velocity but leaves angular velocity native, useful for testing whether a
 state-forced angular jump survives without `setElementAngularVelocity`.
+`--static-skid-diagnostics` reads the private `bAlreadySkidding` global at
+`0xC1CDAC` on the Frida route only.
 
 The debug server must disable only the anti-cheats that reject the local
 instrumented client (the current local harness uses AC `4,56`), and the debug

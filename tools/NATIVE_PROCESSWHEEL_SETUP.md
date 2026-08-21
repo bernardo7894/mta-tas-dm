@@ -68,7 +68,8 @@ controls-only runs, `--cpp-no-matrix` isolates matrix-snapshot overhead; the
 local C++ matrix read is also SEH-guarded. `--pose-linear-only-playback` is a
 separate diagnostic mode that forces recorded position/rotation/linear velocity
 while leaving angular velocity native, and must not be treated as an independent
-trajectory.
+trajectory. `--static-skid-diagnostics` (Frida only) reads the private
+`bAlreadySkidding` global at `0xC1CDAC` for source-semantic verification.
 
 Example:
 

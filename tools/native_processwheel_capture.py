@@ -52,6 +52,7 @@ def _native_script(
     *,
     install_wheel_hook: bool = True,
     collision_diagnostics: bool = False,
+    static_skid_diagnostics: bool = False,
 ) -> str:
     bin_dir = _js_string(str(mta_bin))
     mta_dir = _js_string(str(mta_bin / "MTA"))
@@ -62,6 +63,7 @@ const MTA_DIR = {mta_dir};
 const OUTPUT_LABEL = {_js_string(output_label)};
 const INSTALL_NATIVE_WHEEL_HOOK = {str(install_wheel_hook).lower()};
 const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
+const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
 let bootstrapDone = false;
 
 Process.setExceptionHandler(function(details) {{
@@ -144,6 +146,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const applyCollisionAlt = main.base.add(0x144D50);
     const gameFrameCounter = main.base.add(0x77CB4C);
     const gameTimeMs = main.base.add(0x77CB84);
+    const staticAlreadySkidding = main.base.add(0x81CDAC);
     let frame = 0, processCalls = 0, wheelCalls = 0, batch = [];
     const controlStates = new Map();
     const pendingCollisions = new Map();
@@ -417,7 +420,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
                     controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces,applyTurnForces:c.applyTurnForces,collisionAlternates:c.collisionAlternates}} : null;}})(),
-                    linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular
+                    linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular,
+                    staticAlreadySkiddingBefore:INSTALL_STATIC_SKID_DIAGNOSTICS ? u8(staticAlreadySkidding) : null
                 }};
                 wheelCalls++;
             }},
@@ -429,6 +433,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                 record.linearVelocityDelta=delta(afterLinear,record.linearVelocityBefore);
                 record.angularVelocityDelta=delta(afterAngular,record.angularVelocityBefore);
                 try {{ record.wheelStateAfter=this.nativeState.readU32(); }} catch(_) {{ record.wheelStateAfter=null; }}
+                if (INSTALL_STATIC_SKID_DIAGNOSTICS)
+                    record.staticAlreadySkiddingAfter = u8(staticAlreadySkidding);
                 batch.push(record); if (batch.length >= 32) flush();
             }}
         }});
@@ -757,6 +763,11 @@ def main() -> int:
         help="observe collision callbacks in the Frida route, or C++ ApplyCollisionAlt with --cpp-hook",
     )
     parser.add_argument(
+        "--static-skid-diagnostics",
+        action="store_true",
+        help="read GTA's private CVehicle::ProcessWheel bAlreadySkidding static (Frida only)",
+    )
+    parser.add_argument(
         "--playback-output-name",
         help="temporarily select this Lua physics-output name in the local native_capture resource",
     )
@@ -776,6 +787,8 @@ def main() -> int:
         parser.error("--cpp-minimal and --cpp-no-matrix are mutually exclusive")
     if args.cpp_hook and args.timing_only:
         parser.error("--cpp-hook and --timing-only are mutually exclusive")
+    if args.static_skid_diagnostics and (args.cpp_hook or args.timing_only):
+        parser.error("--static-skid-diagnostics requires the Frida ProcessWheel route")
     if args.playback_output_name and not args.playback_output_name.replace("-", "").replace("_", "").isalnum():
         parser.error("--playback-output-name may contain only letters, numbers, '-' and '_'")
     _kill_targets()
@@ -859,6 +872,7 @@ def main() -> int:
         ),
         "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
+        "static_skid_diagnostics": bool(args.static_skid_diagnostics),
         "cpp_capture_level": (
             "minimal" if args.cpp_minimal
             else "no-matrix" if args.cpp_no_matrix
@@ -900,6 +914,7 @@ def main() -> int:
         args.mta_bin.resolve(), args.label,
         install_wheel_hook=not (args.cpp_hook or args.timing_only),
         collision_diagnostics=args.collision_diagnostics,
+        static_skid_diagnostics=args.static_skid_diagnostics,
     )
     if args.orchestrator:
         if not args.orchestrator.exists():
@@ -920,6 +935,9 @@ def main() -> int:
                 "const INSTALL_NATIVE_WHEEL_HOOK = true;\n"
                 "const INSTALL_COLLISION_DIAGNOSTICS = "
                 + str(args.collision_diagnostics).lower()
+                + ";\n"
+                "const INSTALL_STATIC_SKID_DIAGNOSTICS = "
+                + str(args.static_skid_diagnostics).lower()
                 + ";\n"
                 + native_script[native_script.index(marker):]
             )
