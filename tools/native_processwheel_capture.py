@@ -444,6 +444,27 @@ def _prepare_public_tas_folder(mta_bin: Path) -> Any:
     return restore
 
 
+def _prepare_native_capture_output(mta_bin: Path, output_name: str) -> Any:
+    """Temporarily select a unique Lua playback-output name in native_capture."""
+    resource = (
+        mta_bin / "server" / "mods" / "deathmatch" / "resources"
+        / "native_capture" / "server.lua"
+    )
+    if not resource.exists():
+        return lambda: None
+    original = resource.read_bytes()
+    marker = b'"etnies-native", "native-etnies"'
+    replacement = f'"etnies-native", "{output_name}"'.encode("ascii")
+    if marker not in original:
+        return lambda: None
+    resource.write_bytes(original.replace(marker, replacement, 1))
+
+    def restore() -> None:
+        resource.write_bytes(original)
+
+    return restore
+
+
 def _prepare_real_vorbis(mta_bin: Path) -> Any:
     """Temporarily disable the loader proxy so Frida owns MTA bootstrap."""
     original = mta_bin / "vorbisfile.dll"
@@ -537,9 +558,15 @@ def main() -> int:
         action="store_true",
         help="also observe ProcessCollision and ProcessControlCollisionCheck in the Frida route",
     )
+    parser.add_argument(
+        "--playback-output-name",
+        help="temporarily select this Lua physics-output name in the local native_capture resource",
+    )
     args = parser.parse_args()
     if args.cpp_hook and args.timing_only:
         parser.error("--cpp-hook and --timing-only are mutually exclusive")
+    if args.playback_output_name and not args.playback_output_name.replace("-", "").replace("_", "").isalnum():
+        parser.error("--playback-output-name may contain only letters, numbers, '-' and '_'")
     _kill_targets()
     mta_bin = args.mta_bin.resolve()
     cpp_binary = args.output.with_suffix(args.output.suffix + ".cpp.bin")
@@ -556,6 +583,10 @@ def main() -> int:
     os.environ["MTA_BIN"] = str(mta_bin)
     restore_registry = _prepare_registry(mta_bin) if args.prepare_registry else (lambda: None)
     restore_tas_folder = _prepare_public_tas_folder(mta_bin) if args.prepare_tas_folder else (lambda: None)
+    restore_capture_output = (
+        _prepare_native_capture_output(mta_bin, args.playback_output_name)
+        if args.playback_output_name else (lambda: None)
+    )
     restore_vorbis = _prepare_real_vorbis(mta_bin) if args.use_real_vorbis else (lambda: None)
     server = None
     if args.server_exe:
@@ -589,6 +620,7 @@ def main() -> int:
         "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
         "prepare_tas_folder": bool(args.prepare_tas_folder),
+        "playback_output_name": args.playback_output_name or "",
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
     meta_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -673,6 +705,7 @@ def main() -> int:
             restore_vorbis()
         finally:
             restore_tas_folder()
+            restore_capture_output()
             restore_registry()
             if args.cpp_hook:
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT", None)
