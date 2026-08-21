@@ -175,6 +175,18 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
         collisionPoints:[0,1,2,3].map(i => vec(vehicle.add(0x724 + i * 0x2C))),
         collisionNormals:[0,1,2,3].map(i => vec(vehicle.add(0x724 + i * 0x2C + 0x10))),
     }});
+    const handlingSnapshot = vehicle => {{
+        try {{
+            const handling = vehicle.add(0x384).readPointer();
+            return {{
+                pointer:handling.toString(),
+                engineAcceleration:f(handling.add(0x7C)),
+                engineInertia:f(handling.add(0x80)),
+                maxVelocity:f(handling.add(0x84)),
+                velocityFrequency:f(vehicle.add(0x94)),
+            }};
+        }} catch(_) {{ return null; }}
+    }};
     const physicalSnapshot = vehicle => ({{
         linearVelocity:vec(vehicle.add(0x44)),
         angularVelocity:vec(vehicle.add(0x50)),
@@ -314,6 +326,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             vehicleFlagsByte3:u8(vehicle.add(0x42B)),
                             wheelStateMemory:u32Array4(vehicle.add(0x968)),
                             audioChangingGear:((u8(vehicle.add(0x42B)) || 0) & 0x20) !== 0,
+                            handling:handlingSnapshot(vehicle),
                             collisionProcess:pendingCollisions.get(key) || null,
                             entityCollisionProcess:null,
                             suspensionAtProcessControlEntry:INSTALL_COLLISION_DIAGNOSTICS ? suspensionSnapshot(vehicle) : null,
@@ -650,7 +663,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     gasPedal:f(vehicle.add(0x49C)), brakePedal:f(vehicle.add(0x4A0)),
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
-                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,timerOldStep:c.timerOldStep,timerStepNonClipped:c.timerStepNonClipped,timerStep:c.timerStep,currentGear:c.currentGear,gearChangeCount:c.gearChangeCount,inertiaValue1:c.inertiaValue1,inertiaValue2:c.inertiaValue2,rawSteerAngle:c.rawSteerAngle,steerAngle:c.steerAngle,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,wheelStateMemory:c.wheelStateMemory,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,entityCollisionProcess:c.entityCollisionProcess,suspensionAtProcessControlEntry:c.suspensionAtProcessControlEntry,suspensionProcess:c.suspensionProcess,frictionProcess:c.frictionProcess,frictionForceEvents:c.frictionForceEvents,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces,applyTurnForces:c.applyTurnForces,collisionAlternates:c.collisionAlternates}} : null;}})(),
+                    handling:(()=>{{const c=controlStates.get(vehicle.toString());return c ? c.handling : handlingSnapshot(vehicle);}})(),
+                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,timerOldStep:c.timerOldStep,timerStepNonClipped:c.timerStepNonClipped,timerStep:c.timerStep,currentGear:c.currentGear,gearChangeCount:c.gearChangeCount,inertiaValue1:c.inertiaValue1,inertiaValue2:c.inertiaValue2,rawSteerAngle:c.rawSteerAngle,steerAngle:c.steerAngle,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,wheelStateMemory:c.wheelStateMemory,audioChangingGear:c.audioChangingGear,handling:c.handling,collisionProcess:c.collisionProcess,entityCollisionProcess:c.entityCollisionProcess,suspensionAtProcessControlEntry:c.suspensionAtProcessControlEntry,suspensionProcess:c.suspensionProcess,frictionProcess:c.frictionProcess,frictionForceEvents:c.frictionForceEvents,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces,applyTurnForces:c.applyTurnForces,collisionAlternates:c.collisionAlternates}} : null;}})(),
                     controlExit:null,
                     linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular,
                     staticAlreadySkiddingBefore:INSTALL_STATIC_SKID_DIAGNOSTICS ? u8(staticAlreadySkidding) : null
