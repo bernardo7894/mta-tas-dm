@@ -255,8 +255,11 @@ The local debug build currently needs its matching private capture server and
 resource setup. The server harness uses `<fpslimit>100</fpslimit>` to match the
 reference recording's 100 Hz cadence, and disables anti-cheats `4,56` because
 the instrumented debug client is otherwise rejected; neither setting is part
-of ordinary MTA recordings. Keep native rows separate from Lua `vehicleTelemetry`
-fields and preserve their provenance when merging diagnostic artifacts.
+of ordinary MTA recordings. `native_processwheel_capture.py --prepare-tas-folder`
+temporarily switches the local TAS resource to its public `saves` folder so
+large automated playback inputs are available without manual copying, then
+restores the file. Keep native rows separate from Lua `vehicleTelemetry` fields
+and preserve their provenance when merging diagnostic artifacts.
 
 Also inspect the actual Git diff before committing. This upstream file historically uses CRLF line endings; avoid creating enormous diffs consisting only of line-ending normalization.
 
