@@ -99,7 +99,8 @@ model is 411:
 - private suspension compression arrays at `CAutomobile` offsets `0x7D4`,
   `0x7E4`, and `0x7F4` (`current`, `previous`, and `m_WheelCounts`);
 - actual `m_fSteerAngle` at `0x494`, raw steering at `0x58C`, contact counts,
-  model-origin position/matrix, and before/after velocity deltas.
+  mass/turn-mass/centre-of-mass, model-origin position/matrix, and
+  before/after velocity deltas.
 
 The native JSONL rows are explicitly marked `gta-native-pre-ProcessWheel` and
 must not be presented as Lua-derived telemetry. The corresponding alignment
