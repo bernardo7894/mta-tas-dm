@@ -56,9 +56,10 @@ route; convert its sibling `.cpp.bin` file with
 Frida route remains available for cross-checking. `--timing-only` runs the
 same automated playback without either ProcessWheel hook and reports timer
 samples, providing a no-hook timing control. The optional
-`--collision-diagnostics` flag adds read-only `ProcessCollision` and
-`ProcessControlCollisionCheck` snapshots to the Frida route; it is intended
-for collision classification, not the minimal timing capture.
+`--collision-diagnostics` flag adds read-only `ProcessCollision`,
+`CheckCollision`, `ProcessControlCollisionCheck`, and `ApplyForce` snapshots
+to the Frida route; it is intended for collision/source classification, not
+the minimal timing capture.
 
 Example:
 
