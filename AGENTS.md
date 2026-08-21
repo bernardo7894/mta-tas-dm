@@ -257,6 +257,12 @@ opt-in equivalent `--cpp-static-skid-diagnostics` and otherwise emits `0xFF`
 sentinels for that optional field. `--one-tick-config` is a separate
 state-input diagnostic that writes one public state/control sample and captures
 native `ProcessControl` entry/exit; it is not continuous independent evidence.
+Frida rows additionally snapshot the runtime handling engine acceleration,
+engine inertia, max velocity, and physical velocity-frequency fields from the
+vehicle's handling pointer; these are direct native diagnostics, not Lua
+metadata. Narrow captures may lack `controlExit` even when the enclosing
+`ApplyTurnForces` trace is present, so downstream oracle reports must preserve
+that provenance explicitly.
 `--cpp-no-matrix` isolates matrix-snapshot overhead,
 and the C++ matrix snapshot is guarded in the local debug source for robust long
 runs. With `--cpp-hook --collision-diagnostics`, the C++ route also records direct
