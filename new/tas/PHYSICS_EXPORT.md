@@ -137,7 +137,15 @@ separate non-independent diagnostic mode that forces recorded position/rotation/
 linear velocity but leaves angular velocity native, useful for testing whether a
 state-forced angular jump survives without `setElementAngularVelocity`.
 `--static-skid-diagnostics` reads the private `bAlreadySkidding` global at
-`0xC1CDAC` on the Frida route only.
+`0xC1CDAC` on the Frida route only. `--collision-diagnostics` additionally
+snapshots the 12-entry `CAutomobile` collision candidate buffer at RVA
+`0x81BFF8` (`aAutomobileColPoints`), the `ProcessEntityCollision` output
+points, and ProcessSuspension before/after state. These remain direct native
+collision-stage evidence; `m_wheelColPoint` can be a latched historical point
+rather than a fresh ray hit. `--playback-start-delay-ms 30000` enables a warm
+native startup window, and `--capture-from-first-gas` buffers the wheel stream
+until the first nonzero pedal to avoid warm-up IPC overhead. Both options are
+recorded as diagnostic metadata.
 
 The debug server must disable only the anti-cheats that reject the local
 instrumented client (the current local harness uses AC `4,56`), and the debug

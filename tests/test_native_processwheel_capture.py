@@ -50,3 +50,41 @@ def test_one_tick_wheel_state_offset_is_after_gas_audio_field():
     source = TOOL.read_text(encoding="utf-8")
     assert "writeU32Array(0x968, internal.wheelStates)" in source
     assert "u32Array4(vehicle.add(0x968))" in source
+
+
+def test_collision_diagnostics_capture_fresh_automobile_col_points():
+    source = TOOL.read_text(encoding="utf-8")
+    assert "main.base.add(0x81BFF8)" in source
+    assert "automobileCollisionPoints:colPointArray(automobileCollisionPoints, 12)" in source
+    assert "outputCollisionPoints:colPointArray(this.nativeEntityCollisionOutput, 32)" in source
+    assert "automobileCollisionPointsAfter:colPointArray(automobileCollisionPoints, 12)" in source
+    assert "CAPTURE_FROM_FIRST_GAS" in source
+    assert "maxPreCaptureRecords = 512" in source
+
+
+def test_native_capture_start_delay_handles_crlf_and_restores(tmp_path):
+    tool = _load_tool()
+    resource = (
+        tmp_path / "server" / "mods" / "deathmatch" / "resources" / "native_capture"
+    )
+    resource.mkdir(parents=True)
+    original = (
+        'addEvent("nativeCapture:start", true)\r\n'
+        'addEventHandler("nativeCapture:start", resourceRoot, function(recordName, outputName)\r\n'
+        '    setTimer(function()\r\n'
+        '        executeCommandHandler("loadr", recordName)\r\n'
+        '        setTimer(function()\r\n'
+        '            executeCommandHandler("recordplayback", outputName)\r\n'
+        '        end, 1000, 1)\r\n'
+        '    end, 1000, 1)\r\n'
+        'end)\r\n'
+    ).encode()
+    path = resource / "client.lua"
+    path.write_bytes(original)
+
+    restore = tool._prepare_native_capture_start_delay(tmp_path, 30000)
+    prepared = path.read_bytes().decode()
+    assert "end, 30000, 1)" in prepared
+    assert "\r\n" in prepared
+    restore()
+    assert path.read_bytes() == original

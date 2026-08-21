@@ -53,6 +53,7 @@ def _native_script(
     install_wheel_hook: bool = True,
     collision_diagnostics: bool = False,
     static_skid_diagnostics: bool = False,
+    capture_from_first_gas: bool = False,
     one_tick_config: dict[str, Any] | None = None,
 ) -> str:
     bin_dir = _js_string(str(mta_bin))
@@ -65,6 +66,7 @@ const OUTPUT_LABEL = {_js_string(output_label)};
 const INSTALL_NATIVE_WHEEL_HOOK = {str(install_wheel_hook).lower()};
 const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
 const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
+const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
 const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":"))};
 let bootstrapDone = false;
 
@@ -142,6 +144,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const processControl = main.base.add({PROCESS_CONTROL_RVA});
     const processControlCollisionCheck = main.base.add(0x2A29C0);
     const processEntityCollision = main.base.add(0x2ACE70);
+    const automobileCollisionPoints = main.base.add(0x81BFF8);
     const processSuspension = main.base.add(0x2AFB10);
     const processCollision = main.base.add(0x14DFB0);
     const checkCollision = main.base.add(0x14D920);
@@ -157,6 +160,9 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const gameTimeMs = main.base.add(0x77CB84);
     const staticAlreadySkidding = main.base.add(0x81CDAC);
     let frame = 0, processCalls = 0, wheelCalls = 0, batch = [];
+    let captureActive = !CAPTURE_FROM_FIRST_GAS;
+    const preCaptureRecords = [];
+    const maxPreCaptureRecords = 512;
     let oneTickInjected = false;
     const controlStates = new Map();
     const pendingCollisions = new Map();
@@ -175,6 +181,22 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
         collisionPoints:[0,1,2,3].map(i => vec(vehicle.add(0x724 + i * 0x2C))),
         collisionNormals:[0,1,2,3].map(i => vec(vehicle.add(0x724 + i * 0x2C + 0x10))),
     }});
+    const colPointSnapshot = point => ({{
+        point:vec(point), fieldC:f(point.add(0x0C)), normal:vec(point.add(0x10)),
+        field1C:f(point.add(0x1C)), surfaceA:u8(point.add(0x20)),
+        pieceA:u8(point.add(0x21)), lightingA:u8(point.add(0x22)),
+        surfaceB:u8(point.add(0x23)), pieceB:u8(point.add(0x24)),
+        lightingB:u8(point.add(0x25)), depth:f(point.add(0x28)),
+    }});
+    const colPointArray = (base, count) => {{
+        if (!base || base.isNull()) return null;
+        const result = [];
+        for (let i = 0; i < count; i++) {{
+            try {{ result.push(colPointSnapshot(base.add(i * 0x2C))); }}
+            catch (_) {{ result.push(null); }}
+        }}
+        return result;
+    }};
     const handlingSnapshot = vehicle => {{
         try {{
             const handling = vehicle.add(0x384).readPointer();
@@ -217,7 +239,12 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     for (let i=0; i<expectedWheelEntry.length; i++)
         if (processWheel.add(i).readU8() !== expectedWheelEntry[i])
             throw new Error('ProcessWheel signature mismatch at '+processWheel+'; refusing hardcoded hook');
-    function flush() {{ if (batch.length) {{ send({{type:'native_batch', label:OUTPUT_LABEL, records:batch}}); batch=[]; }} }}
+    function flush() {{
+        if (batch.length && captureActive) {{
+            send({{type:'native_batch', label:OUTPUT_LABEL, records:batch}});
+            batch=[];
+        }}
+    }}
     try {{
         Interceptor.attach(processControl, {{
             onEnter() {{
@@ -365,6 +392,12 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     this.nativeEntityCollisionKey = vehicle.toString();
                     this.nativeEntityCollisionVehicle = vehicle;
                     this.nativeEntityCollisionBefore = suspensionSnapshot(vehicle);
+                    this.nativeEntityCollisionEntity = null;
+                    this.nativeEntityCollisionOutput = null;
+                    try {{
+                        this.nativeEntityCollisionEntity = this.context.esp.add(4).readPointer();
+                        this.nativeEntityCollisionOutput = this.context.esp.add(8).readPointer();
+                    }} catch (_) {{}}
                 }} catch(_) {{}}
             }},
             onLeave(returnValue) {{
@@ -373,8 +406,11 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     const control = controlStates.get(this.nativeEntityCollisionKey);
                     if (control) control.entityCollisionProcess = {{
                         result:returnValue.toInt32(),
+                        entity:this.nativeEntityCollisionEntity ? this.nativeEntityCollisionEntity.toString() : null,
                         before:this.nativeEntityCollisionBefore,
                         after:suspensionSnapshot(this.nativeEntityCollisionVehicle),
+                        automobileCollisionPoints:colPointArray(automobileCollisionPoints, 12),
+                        outputCollisionPoints:colPointArray(this.nativeEntityCollisionOutput, 32),
                     }};
                 }} catch(_) {{}}
             }}
@@ -387,6 +423,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     this.nativeSuspensionKey = vehicle.toString();
                     this.nativeSuspensionVehicle = vehicle;
                     this.nativeSuspensionBefore = suspensionSnapshot(vehicle);
+                    this.nativeSuspensionCandidatesBefore = colPointArray(automobileCollisionPoints, 12);
                 }} catch(_) {{}}
             }},
             onLeave() {{
@@ -396,6 +433,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     if (control) control.suspensionProcess = {{
                         before:this.nativeSuspensionBefore,
                         after:suspensionSnapshot(this.nativeSuspensionVehicle),
+                        automobileCollisionPointsBefore:this.nativeSuspensionCandidatesBefore,
+                        automobileCollisionPointsAfter:colPointArray(automobileCollisionPoints, 12),
                     }};
                 }} catch(_) {{}}
             }}
@@ -683,7 +722,20 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                 try {{ record.wheelStateAfter=this.nativeState.readU32(); }} catch(_) {{ record.wheelStateAfter=null; }}
                 if (INSTALL_STATIC_SKID_DIAGNOSTICS)
                     record.staticAlreadySkiddingAfter = u8(staticAlreadySkidding);
-                batch.push(record); if (batch.length >= 32) flush();
+                if (CAPTURE_FROM_FIRST_GAS && !captureActive) {{
+                    preCaptureRecords.push(record);
+                    if (preCaptureRecords.length > maxPreCaptureRecords)
+                        preCaptureRecords.shift();
+                    if ((record.gasPedal || 0) > 0.5 || (record.brakePedal || 0) < -0.5) {{
+                        captureActive = true;
+                        batch = preCaptureRecords.splice(0);
+                    }} else {{
+                        return;
+                    }}
+                }} else {{
+                    batch.push(record);
+                }}
+                if (batch.length >= 32) flush();
             }}
         }});
     }} catch(e) {{ send({{type:'native_hook_error', message:String(e)}}); }}
@@ -876,6 +928,36 @@ def _prepare_native_capture_output(mta_bin: Path, output_name: str) -> Any:
 
     def restore() -> None:
         resource.write_bytes(original)
+
+    return restore
+
+
+def _prepare_native_capture_start_delay(mta_bin: Path, delay_ms: int) -> Any:
+    """Temporarily delay source playback so the native timer can warm up."""
+    client = (
+        mta_bin / "server" / "mods" / "deathmatch" / "resources"
+        / "native_capture" / "client.lua"
+    )
+    if not client.exists():
+        return lambda: None
+    original = client.read_bytes()
+    newline = b"\r\n" if b"\r\n" in original else b"\n"
+    marker_lines = [
+        b"    setTimer(function()",
+        b"        executeCommandHandler(\"loadr\", recordName)",
+        b"        setTimer(function()",
+        b"            executeCommandHandler(\"recordplayback\", outputName)",
+        b"        end, 1000, 1)",
+        b"    end, 1000, 1)",
+    ]
+    marker = newline.join(marker_lines)
+    if original.count(marker) != 1:
+        return lambda: None
+    replacement = newline.join(marker_lines[:-1] + [f"    end, {int(delay_ms)}, 1)".encode("ascii")])
+    client.write_bytes(original.replace(marker, replacement, 1))
+
+    def restore() -> None:
+        client.write_bytes(original)
 
     return restore
 
@@ -1158,8 +1240,19 @@ def main() -> int:
         help="read GTA's private CVehicle::ProcessWheel bAlreadySkidding static (Frida only)",
     )
     parser.add_argument(
+        "--capture-from-first-gas",
+        action="store_true",
+        help="buffer native rows until the first nonzero gas/brake, avoiding warm-up IPC overhead",
+    )
+    parser.add_argument(
         "--playback-output-name",
         help="temporarily select this Lua physics-output name in the local native_capture resource",
+    )
+    parser.add_argument(
+        "--playback-start-delay-ms",
+        type=int,
+        default=1000,
+        help="delay source playback after vehicle setup; use 30000 for a warm native timer window",
     )
     args = parser.parse_args()
     if args.cpp_minimal or args.cpp_no_matrix:
@@ -1184,6 +1277,8 @@ def main() -> int:
         parser.error("--cpp-static-skid-diagnostics requires --cpp-hook")
     if args.playback_output_name and not args.playback_output_name.replace("-", "").replace("_", "").isalnum():
         parser.error("--playback-output-name may contain only letters, numbers, '-' and '_'")
+    if args.playback_start_delay_ms < 0:
+        parser.error("--playback-start-delay-ms must be non-negative")
     server_commands_after: list[tuple[float, str]] = []
     for raw_delay, command in args.server_command_after:
         try:
@@ -1249,6 +1344,9 @@ def main() -> int:
         _prepare_native_capture_output(mta_bin, args.playback_output_name)
         if args.playback_output_name else (lambda: None)
     )
+    restore_capture_start_delay = _prepare_native_capture_start_delay(
+        mta_bin, args.playback_start_delay_ms
+    )
     restore_vorbis = _prepare_real_vorbis(mta_bin) if args.use_real_vorbis else (lambda: None)
     server = None
     server_command_timers: list[threading.Timer] = []
@@ -1305,6 +1403,7 @@ def main() -> int:
         "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
         "static_skid_diagnostics": bool(args.static_skid_diagnostics or args.cpp_static_skid_diagnostics),
+        "capture_from_first_gas": bool(args.capture_from_first_gas),
         "cpp_static_skid_diagnostics": bool(args.cpp_static_skid_diagnostics),
         "cpp_capture_level": (
             "minimal" if args.cpp_minimal
@@ -1316,6 +1415,7 @@ def main() -> int:
         "pose_only_playback": bool(args.pose_only_playback),
         "pose_linear_only_playback": bool(args.pose_linear_only_playback),
         "playback_output_name": args.playback_output_name or "",
+        "playback_start_delay_ms": args.playback_start_delay_ms,
         "one_tick_diagnostic": one_tick_config is not None,
         "one_tick_config": one_tick_config or {},
         "server_commands_after": [
@@ -1354,6 +1454,7 @@ def main() -> int:
         install_wheel_hook=not (args.cpp_hook or args.timing_only),
         collision_diagnostics=args.collision_diagnostics,
         static_skid_diagnostics=args.static_skid_diagnostics,
+        capture_from_first_gas=args.capture_from_first_gas,
         one_tick_config=one_tick_config,
     )
     if args.orchestrator:
@@ -1378,6 +1479,9 @@ def main() -> int:
                 + ";\n"
                 "const INSTALL_STATIC_SKID_DIAGNOSTICS = "
                 + str(args.static_skid_diagnostics).lower()
+                + ";\n"
+                "const CAPTURE_FROM_FIRST_GAS = "
+                + str(args.capture_from_first_gas).lower()
                 + ";\n"
                 "const ONE_TICK_CONFIG = "
                 + json.dumps(one_tick_config or {}, separators=(",", ":"))
@@ -1421,6 +1525,7 @@ def main() -> int:
             restore_controls_only()
             restore_one_tick()
             restore_capture_output()
+            restore_capture_start_delay()
             restore_registry()
             if args.cpp_hook:
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT", None)

@@ -254,7 +254,14 @@ position/rotation/linear velocity but leaves angular velocity native; it is not
 an independent trajectory. `--static-skid-diagnostics` reads the private
 `bAlreadySkidding` global at `0xC1CDAC` on the Frida route; the C++ route has the
 opt-in equivalent `--cpp-static-skid-diagnostics` and otherwise emits `0xFF`
-sentinels for that optional field. `--one-tick-config` is a separate
+sentinels for that optional field. `--collision-diagnostics` additionally
+snapshots the native `aAutomobileColPoints` candidate buffer at RVA
+`0x81BFF8`, `ProcessEntityCollision` output points, and ProcessSuspension
+before/after state; these are direct collision-stage diagnostics and do not
+make `m_wheelColPoint` a guaranteed fresh ray result. `--playback-start-delay-ms`
+can warm the native timer before source playback, and `--capture-from-first-gas`
+buffers Frida rows until the first nonzero pedal; both values are recorded in
+metadata. `--one-tick-config` is a separate
 state-input diagnostic that writes one public state/control sample and captures
 native `ProcessControl` entry/exit; it is not continuous independent evidence.
 Frida rows additionally snapshot the runtime handling engine acceleration,
