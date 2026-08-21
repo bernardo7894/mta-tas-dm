@@ -155,6 +155,10 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const physicalSnapshot = vehicle => ({{
         linearVelocity:vec(vehicle.add(0x44)),
         angularVelocity:vec(vehicle.add(0x50)),
+        frictionMoveVelocity:vec(vehicle.add(0x5C)),
+        frictionAngularVelocity:vec(vehicle.add(0x68)),
+        force:vec(vehicle.add(0x74)),
+        torque:vec(vehicle.add(0x80)),
         position:vec(vehicle.add(0x04)),
         collisionPosition:vec(vehicle.add(0xEC)),
         collisionImpactVelocity:vec(vehicle.add(0xE0)),
@@ -165,8 +169,12 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
         if (!before || !after) return false;
         const lv = delta(after.linearVelocity, before.linearVelocity) || [];
         const av = delta(after.angularVelocity, before.angularVelocity) || [];
+        const fav = delta(after.frictionAngularVelocity, before.frictionAngularVelocity) || [];
+        const fmv = delta(after.frictionMoveVelocity, before.frictionMoveVelocity) || [];
         return Math.sqrt(lv.reduce((s,v) => s + v*v, 0)) > 1e-7
             || Math.sqrt(av.reduce((s,v) => s + v*v, 0)) > 1e-7
+            || Math.sqrt(fav.reduce((s,v) => s + v*v, 0)) > 1e-7
+            || Math.sqrt(fmv.reduce((s,v) => s + v*v, 0)) > 1e-7
             || after.damageImpulse !== before.damageImpulse
             || after.collidedEntity !== before.collidedEntity;
     }};
@@ -188,6 +196,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
                             linearVelocity:vec(vehicle.add(0x44)),
                             angularVelocity:vec(vehicle.add(0x50)),
+                            frictionMoveVelocity:vec(vehicle.add(0x5C)),
+                            frictionAngularVelocity:vec(vehicle.add(0x68)),
                             vtable:(()=>{{try{{return vehicle.readPointer().toString()}}catch(_){{return null}}}})(),
                             vtableCollisionCheck:(()=>{{try{{return vehicle.readPointer().add(0x5C).readPointer().toString()}}catch(_){{return null}}}})(),
                             vehicleFlagsByte3:u8(vehicle.add(0x42B)),
@@ -332,7 +342,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     gasPedal:f(vehicle.add(0x49C)), brakePedal:f(vehicle.add(0x4A0)),
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
-                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces}} : null;}})(),
+                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces}} : null;}})(),
                     linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular
                 }};
                 wheelCalls++;
