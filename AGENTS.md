@@ -249,7 +249,11 @@ are the `wheelContactSpeed` argument at ProcessWheel entry, after the preceding
 GTA suspension pass. The capture tool's recommended `--controls-only-playback`
 mode temporarily disables legacy TAS pose/velocity writes; without it, the TAS
 resource imposes recorded state and the native rows are state-forced diagnostics.
-With `--cpp-hook --collision-diagnostics`, the C++ route also records direct
+`--pose-linear-only-playback` is a separate diagnostic mode that writes recorded
+position/rotation/linear velocity but leaves angular velocity native; it is not
+an independent trajectory. `--cpp-no-matrix` isolates matrix-snapshot overhead,
+and the C++ matrix snapshot is guarded in the local debug source for robust long
+runs. With `--cpp-hook --collision-diagnostics`, the C++ route also records direct
 `ApplyCollisionAlt` outputs at call sites `0x54C9FA` and `0x54CAC2`. The C++ route emits a binary batch stream converted by
 `infernus-physics/tools/convert_native_processwheel_cpp.py`. The corresponding
 alignment/report tool is `infernus-physics/tools/align_native_processwheel.py`.

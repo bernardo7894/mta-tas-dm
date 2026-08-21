@@ -130,7 +130,12 @@ Debug `multiplayer_sa_d.dll` call-site wrapper writes a sibling
 `native-processwheel.jsonl.cpp.bin`; convert it with
 `infernus-physics/tools/convert_native_processwheel_cpp.py` before alignment.
 `--timing-only` runs the same automation with no ProcessWheel hook for timing
-control.
+control. `--cpp-no-matrix` keeps the direct wheel/suspension fields while
+omitting the matrix snapshot when isolating long-run instrumentation overhead;
+the local C++ matrix read is fault-guarded. `--pose-linear-only-playback` is a
+separate non-independent diagnostic mode that forces recorded position/rotation/
+linear velocity but leaves angular velocity native, useful for testing whether a
+state-forced angular jump survives without `setElementAngularVelocity`.
 
 The debug server must disable only the anti-cheats that reject the local
 instrumented client (the current local harness uses AC `4,56`), and the debug

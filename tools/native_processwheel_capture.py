@@ -501,6 +501,67 @@ def _prepare_registry(mta_bin: Path) -> Any:
     return restore
 
 
+def _prepare_pose_only_playback(mta_bin: Path) -> Any:
+    """Temporarily force recorded pose but leave native linear/angular velocity free."""
+    client = (
+        mta_bin / "server" / "mods" / "deathmatch" / "resources"
+        / "tas" / "client.lua"
+    )
+    if not client.exists():
+        return lambda: None
+    original = client.read_bytes()
+    markers = (
+        (
+            b"setElementVelocity(vehicle, vx, vy, vz)",
+            b"-- native-capture pose-only: do not impose linear velocity\n\t\t\t-- setElementVelocity(vehicle, vx, vy, vz)",
+        ),
+        (
+            b"setElementAngularVelocity(vehicle, rvx, rvy, rvz)",
+            b"-- native-capture pose-only: do not impose angular velocity\n\t\t\t-- setElementAngularVelocity(vehicle, rvx, rvy, rvz)",
+        ),
+    )
+    patched = original
+    for old, new in markers:
+        if patched.count(old) != 1:
+            return lambda: None
+        patched = patched.replace(old, new, 1)
+    client.write_bytes(patched)
+
+    def restore() -> None:
+        client.write_bytes(original)
+
+    return restore
+
+
+def _prepare_pose_linear_only_playback(mta_bin: Path) -> Any:
+    """Force recorded position/rotation/linear velocity, but not angular velocity."""
+    client = (
+        mta_bin / "server" / "mods" / "deathmatch" / "resources"
+        / "tas" / "client.lua"
+    )
+    if not client.exists():
+        return lambda: None
+    original = client.read_bytes()
+    markers = (
+        (
+            b"setElementAngularVelocity(vehicle, rvx, rvy, rvz)",
+            b"-- native-capture pose-linear-only: do not impose angular velocity\n\t\t\t-- setElementAngularVelocity(vehicle, rvx, rvy, rvz)",
+        ),
+        (b"playbackInterpolation = true", b"playbackInterpolation = false"),
+    )
+    patched = original
+    for old, new in markers:
+        if patched.count(old) != 1:
+            return lambda: None
+        patched = patched.replace(old, new, 1)
+    client.write_bytes(patched)
+
+    def restore() -> None:
+        client.write_bytes(original)
+
+    return restore
+
+
 def _prepare_controls_only_playback(mta_bin: Path) -> Any:
     """Temporarily make TAS playback apply only recorded controls/state inputs."""
     client = (
@@ -638,6 +699,22 @@ def main() -> int:
         help="temporarily disable recorded pose/velocity playback and apply only recorded controls",
     )
     parser.add_argument(
+        "--pose-only-playback",
+        action="store_true",
+        help=(
+            "temporarily force recorded position/rotation while leaving native linear and "
+            "angular velocity free; diagnostic only, not an independent trajectory"
+        ),
+    )
+    parser.add_argument(
+        "--pose-linear-only-playback",
+        action="store_true",
+        help=(
+            "temporarily force recorded position/rotation/linear velocity while leaving "
+            "native angular velocity free; diagnostic only"
+        ),
+    )
+    parser.add_argument(
         "--use-real-vorbis",
         action="store_true",
         help="temporarily replace mtasa-blue's vorbisfile loader proxy with vorbisfile_real.dll",
@@ -651,6 +728,22 @@ def main() -> int:
         help=(
             "use the optional local mtasa-blue C++ call-site hook instead of "
             "Frida ProcessWheel interception; writes a sibling .cpp.bin stream"
+        ),
+    )
+    parser.add_argument(
+        "--cpp-minimal",
+        action="store_true",
+        help=(
+            "use the C++ ProcessWheel wrapper but capture only direct wheel/contact and "
+            "velocity fields; useful for long-run hook-perturbation isolation"
+        ),
+    )
+    parser.add_argument(
+        "--cpp-no-matrix",
+        action="store_true",
+        help=(
+            "use the full C++ capture except for the vehicle matrix read; "
+            "isolates matrix-snapshot perturbation in long runs"
         ),
     )
     parser.add_argument(
@@ -668,6 +761,19 @@ def main() -> int:
         help="temporarily select this Lua physics-output name in the local native_capture resource",
     )
     args = parser.parse_args()
+    if args.cpp_minimal or args.cpp_no_matrix:
+        args.cpp_hook = True
+    playback_modes = sum(
+        bool(value) for value in (
+            args.controls_only_playback,
+            args.pose_only_playback,
+            args.pose_linear_only_playback,
+        )
+    )
+    if playback_modes > 1:
+        parser.error("playback-only diagnostic modes are mutually exclusive")
+    if args.cpp_minimal and args.cpp_no_matrix:
+        parser.error("--cpp-minimal and --cpp-no-matrix are mutually exclusive")
     if args.cpp_hook and args.timing_only:
         parser.error("--cpp-hook and --timing-only are mutually exclusive")
     if args.playback_output_name and not args.playback_output_name.replace("-", "").replace("_", "").isalnum():
@@ -686,6 +792,10 @@ def main() -> int:
         if cpp_binary.exists():
             cpp_binary.unlink()
         os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT"] = str(cpp_binary.resolve())
+        if args.cpp_minimal:
+            os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_MINIMAL"] = "1"
+        if args.cpp_no_matrix:
+            os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_NO_MATRIX"] = "1"
         if args.collision_diagnostics:
             if cpp_collision_binary.exists():
                 cpp_collision_binary.unlink()
@@ -693,6 +803,14 @@ def main() -> int:
     os.environ["MTA_BIN"] = str(mta_bin)
     restore_registry = _prepare_registry(mta_bin) if args.prepare_registry else (lambda: None)
     restore_tas_folder = _prepare_public_tas_folder(mta_bin) if args.prepare_tas_folder else (lambda: None)
+    restore_pose_linear_only = (
+        _prepare_pose_linear_only_playback(mta_bin)
+        if args.pose_linear_only_playback else (lambda: None)
+    )
+    restore_pose_only = (
+        _prepare_pose_only_playback(mta_bin)
+        if args.pose_only_playback else (lambda: None)
+    )
     restore_controls_only = (
         _prepare_controls_only_playback(mta_bin)
         if args.controls_only_playback else (lambda: None)
@@ -724,7 +842,11 @@ def main() -> int:
         "process_wheel_rva": hex(PROCESS_WHEEL_RVA),
         "direct_observable": "CVehicle::ProcessWheel entry arguments and vehicle state",
         "hook": (
-            "mtasa-blue C++ call-site wrapper"
+            "mtasa-blue C++ minimal call-site wrapper"
+            if args.cpp_minimal
+            else "mtasa-blue C++ no-matrix call-site wrapper"
+            if args.cpp_no_matrix
+            else "mtasa-blue C++ call-site wrapper"
             if args.cpp_hook
             else "none (timer probe)"
             if args.timing_only
@@ -737,8 +859,15 @@ def main() -> int:
         ),
         "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
+        "cpp_capture_level": (
+            "minimal" if args.cpp_minimal
+            else "no-matrix" if args.cpp_no_matrix
+            else "full" if args.cpp_hook else "none"
+        ),
         "prepare_tas_folder": bool(args.prepare_tas_folder),
         "controls_only_playback": bool(args.controls_only_playback),
+        "pose_only_playback": bool(args.pose_only_playback),
+        "pose_linear_only_playback": bool(args.pose_linear_only_playback),
         "playback_output_name": args.playback_output_name or "",
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
@@ -824,11 +953,15 @@ def main() -> int:
             restore_vorbis()
         finally:
             restore_tas_folder()
+            restore_pose_linear_only()
+            restore_pose_only()
             restore_controls_only()
             restore_capture_output()
             restore_registry()
             if args.cpp_hook:
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT", None)
+                os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_MINIMAL", None)
+                os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_NO_MATRIX", None)
                 os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_OUTPUT", None)
     print(f"native capture written to {args.output}")
     return 0

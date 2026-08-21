@@ -63,7 +63,12 @@ intended for collision/source classification, not the minimal timing capture.
 The recommended `--controls-only-playback` mode temporarily disables TAS pose,
 velocity, and angular-velocity playback and applies only recorded controls.
 Without it, legacy TAS playback imposes recorded state and native rows are
-state-forced diagnostics rather than an independent trajectory.
+state-forced diagnostics rather than an independent trajectory. For long C++
+controls-only runs, `--cpp-no-matrix` isolates matrix-snapshot overhead; the
+local C++ matrix read is also SEH-guarded. `--pose-linear-only-playback` is a
+separate diagnostic mode that forces recorded position/rotation/linear velocity
+while leaving angular velocity native, and must not be treated as an independent
+trajectory.
 
 Example:
 
