@@ -750,10 +750,13 @@ def _timing_probe_script() -> str:
 (function installNativeTimingProbe() {
     const main = Process.mainModule;
     const gameFrame = main.base.add(0x77CB4C);
+    const timerOldStep = main.base.add(0x77CB54);
+    const timerStepNonClipped = main.base.add(0x77CB58);
+    const timerStep = main.base.add(0x77CB5C);
     const gameTimeMs = main.base.add(0x77CB84);
     setInterval(function() {
         try {
-            send({type:'native_timing', wallMs:Date.now(), gameFrame:gameFrame.readU32(), gameTimeMs:gameTimeMs.readU32()});
+            send({type:'native_timing', wallMs:Date.now(), gameFrame:gameFrame.readU32(), gameTimeMs:gameTimeMs.readU32(), timerOldStep:timerOldStep.readFloat(), timerStepNonClipped:timerStepNonClipped.readFloat(), timerStep:timerStep.readFloat()});
         } catch (_) {}
     }, 1000);
 })();

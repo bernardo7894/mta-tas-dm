@@ -62,6 +62,13 @@ def test_collision_diagnostics_capture_fresh_automobile_col_points():
     assert "maxPreCaptureRecords = 512" in source
 
 
+def test_timing_probe_captures_native_timer_fields():
+    source = TOOL.read_text(encoding="utf-8")
+    assert "timerOldStep:timerOldStep.readFloat()" in source
+    assert "timerStepNonClipped:timerStepNonClipped.readFloat()" in source
+    assert "timerStep:timerStep.readFloat()" in source
+
+
 def test_native_capture_start_delay_handles_crlf_and_restores(tmp_path):
     tool = _load_tool()
     resource = (
