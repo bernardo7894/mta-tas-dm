@@ -26,6 +26,8 @@
    ```
 
    This is a harness launch aid only; it does not change GTA vehicle forces.
+The native hook filters `m_nModelIndex == 411` before recording, so map
+vehicles do not contaminate the Infernus stream.
 4. Prepare a local server resource that creates the model-411 vehicle and
    starts the TAS playback. The validated local server disabled anti-cheats
    `4,56` because the debug client was rejected by those checks.
