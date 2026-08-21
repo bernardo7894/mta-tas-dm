@@ -251,6 +251,15 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
         Interceptor.attach(processControl, {{
             onEnter() {{
                 const vehicle = this.context.ecx;
+                if (CAPTURE_FROM_FIRST_GAS && !captureActive) {{
+                    try {{
+                        const gas = f(vehicle.add(0x49C)) || 0;
+                        const brake = f(vehicle.add(0x4A0)) || 0;
+                        if (Math.abs(gas) <= 1e-6 && Math.abs(brake) <= 1e-6) return;
+                        captureActive = true;
+                        batch = preCaptureRecords.splice(0);
+                    }} catch (_) {{ return; }}
+                }}
                 try {{
                     if (vehicle.add(0x22).readU16() === 411) {{
                         if (!oneTickInjected && ONE_TICK_CONFIG.nativeInternal && ONE_TICK_CONFIG.position) {{
@@ -388,6 +397,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
         if (INSTALL_COLLISION_DIAGNOSTICS) {{
         Interceptor.attach(processEntityCollision, {{
             onEnter() {{
+                if (CAPTURE_FROM_FIRST_GAS && !captureActive) return;
                 const vehicle = this.context.ecx;
                 try {{
                     if (vehicle.add(0x22).readU16() !== 411) return;
@@ -419,6 +429,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
         }});
         Interceptor.attach(processSuspension, {{
             onEnter() {{
+                if (CAPTURE_FROM_FIRST_GAS && !captureActive) return;
                 const vehicle = this.context.ecx;
                 try {{
                     if (vehicle.add(0x22).readU16() !== 411) return;

@@ -61,6 +61,7 @@ def test_collision_diagnostics_capture_fresh_automobile_col_points():
     assert "CAPTURE_FROM_FIRST_GAS" in source
     assert "SUSPENSION_STAGE_ONLY" in source
     assert "if (!SUSPENSION_STAGE_ONLY)" in source
+    assert "captureActive = true" in source
     assert "maxPreCaptureRecords = 512" in source
 
 
