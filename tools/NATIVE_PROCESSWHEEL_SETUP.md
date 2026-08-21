@@ -50,10 +50,14 @@ and `0x6A5BB7`). The source changes are in
 project/filter entries. Build `Multiplayer SA.vcxproj` as `Debug|Win32`. The
 wrapper calls the original `0x6D6C00` function unchanged and writes a fixed
 binary batch stream only when the environment variable
-`MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT` is set. Use `--cpp-hook` to select this
+`MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT` is set. Non-minimal rows also capture the
+private `m_aSuspensionSpringLength[4]`/`m_aSuspensionLineLength[4]` arrays at
+`0x878`/`0x888` and the current `m_wheelColPoint` point/normal/surface fields
+at `0x724` for line-fraction and collision-point reconstruction. Use `--cpp-hook` to select this
 route; convert its sibling `.cpp.bin` file with
-`infernus-physics/tools/convert_native_processwheel_cpp.py`. The default
-Frida route remains available for cross-checking. `--timing-only` runs the
+`infernus-physics/tools/convert_native_processwheel_cpp.py`; the converter
+accepts the current 354-byte rows and the earlier 294/326-byte row formats.
+The default Frida route remains available for cross-checking. `--timing-only` runs the
 same automated playback without either ProcessWheel hook and reports timer
 samples, providing a no-hook timing control. The optional
 `--collision-diagnostics` flag adds read-only `ProcessCollision`,
