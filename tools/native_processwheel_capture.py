@@ -140,6 +140,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const processCollision = main.base.add(0x14DFB0);
     const checkCollision = main.base.add(0x14D920);
     const applyForce = main.base.add(0x142B50);
+    const applyTurnForce = main.base.add(0x142A50);
+    const applyCollisionAlt = main.base.add(0x144D50);
     const gameFrameCounter = main.base.add(0x77CB4C);
     const gameTimeMs = main.base.add(0x77CB84);
     let frame = 0, processCalls = 0, wheelCalls = 0, batch = [];
@@ -204,6 +206,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             audioChangingGear:((u8(vehicle.add(0x42B)) || 0) & 0x20) !== 0,
                             collisionProcess:pendingCollisions.get(key) || null,
                             applyForces:[],
+                            applyTurnForces:[],
+                            collisionAlternates:[],
                         }});
                         pendingCollisions.delete(key);
                         this.nativeControlKey = key;
@@ -259,6 +263,76 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             before:this.nativeForceBefore,
                             after:after,
                         }});
+                }} catch(_) {{}}
+            }}
+        }});
+        Interceptor.attach(applyTurnForce, {{
+            onEnter() {{
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativeTurnForceKey = vehicle.toString();
+                    this.nativeTurnForceVehicle = vehicle;
+                    this.nativeTurnForceBefore = physicalSnapshot(vehicle);
+                    this.nativeTurnForceVector = [f(this.context.esp.add(4)), f(this.context.esp.add(8)), f(this.context.esp.add(12))];
+                    this.nativeTurnForcePoint = [f(this.context.esp.add(16)), f(this.context.esp.add(20)), f(this.context.esp.add(24))];
+                    this.nativeTurnForceReturnAddress = this.returnAddress.toString();
+                }} catch(_) {{}}
+            }},
+            onLeave() {{
+                if (!this.nativeTurnForceKey) return;
+                try {{
+                    const control = controlStates.get(this.nativeTurnForceKey);
+                    const after = physicalSnapshot(this.nativeTurnForceVehicle);
+                    if (control && snapshotChanged(this.nativeTurnForceBefore, after))
+                        control.applyTurnForces.push({{
+                            force:this.nativeTurnForceVector,
+                            point:this.nativeTurnForcePoint,
+                            returnAddress:this.nativeTurnForceReturnAddress,
+                            before:this.nativeTurnForceBefore,
+                            after:after,
+                        }});
+                }} catch(_) {{}}
+            }}
+        }});
+        Interceptor.attach(applyCollisionAlt, {{
+            onEnter() {{
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    const sp = this.context.esp;
+                    this.nativeCollisionAltKey = vehicle.toString();
+                    this.nativeCollisionAltPoint = sp.add(8).readPointer();
+                    this.nativeCollisionAltMove = sp.add(16).readPointer();
+                    this.nativeCollisionAltTurn = sp.add(20).readPointer();
+                    this.nativeCollisionAltDamage = sp.add(12).readPointer();
+                    this.nativeCollisionAltBefore = physicalSnapshot(vehicle);
+                    this.nativeCollisionAltReturnAddress = this.returnAddress.toString();
+                }} catch(_) {{}}
+            }},
+            onLeave(returnValue) {{
+                if (!this.nativeCollisionAltKey) return;
+                try {{
+                    const control = controlStates.get(this.nativeCollisionAltKey);
+                    if (!control) return;
+                    const cp = this.nativeCollisionAltPoint;
+                    control.collisionAlternates.push({{
+                        returnAddress:this.nativeCollisionAltReturnAddress,
+                        result:returnValue.toInt32(),
+                        point:vec(cp),
+                        normal:vec(cp.add(16)),
+                        surfaceA:u8(cp.add(32)),
+                        pieceA:u8(cp.add(33)),
+                        surfaceB:u8(cp.add(35)),
+                        pieceB:u8(cp.add(36)),
+                        depth:f(cp.add(40)),
+                        damageBefore:f(this.nativeCollisionAltDamage),
+                        moveBefore:vec(this.nativeCollisionAltMove),
+                        turnBefore:vec(this.nativeCollisionAltTurn),
+                        damageAfter:f(this.nativeCollisionAltDamage),
+                        moveAfter:vec(this.nativeCollisionAltMove),
+                        turnAfter:vec(this.nativeCollisionAltTurn),
+                    }});
                 }} catch(_) {{}}
             }}
         }});
@@ -342,7 +416,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     gasPedal:f(vehicle.add(0x49C)), brakePedal:f(vehicle.add(0x4A0)),
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
-                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces}} : null;}})(),
+                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces,applyTurnForces:c.applyTurnForces,collisionAlternates:c.collisionAlternates}} : null;}})(),
                     linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular
                 }};
                 wheelCalls++;
@@ -423,6 +497,32 @@ def _prepare_registry(mta_bin: Path) -> Any:
                     pass
             else:
                 winreg.SetValueEx(restore_key, "Last Run Location", 0, old_type, old_value)
+
+    return restore
+
+
+def _prepare_controls_only_playback(mta_bin: Path) -> Any:
+    """Temporarily make TAS playback apply only recorded controls/state inputs."""
+    client = (
+        mta_bin / "server" / "mods" / "deathmatch" / "resources"
+        / "tas" / "client.lua"
+    )
+    if not client.exists():
+        return lambda: None
+    original = client.read_bytes()
+    markers = (
+        (b"useOnlyBinds = false", b"useOnlyBinds = true"),
+        (b"playbackInterpolation = true", b"playbackInterpolation = false"),
+    )
+    patched = original
+    for old, new in markers:
+        if old not in patched:
+            return lambda: None
+        patched = patched.replace(old, new, 1)
+    client.write_bytes(patched)
+
+    def restore() -> None:
+        client.write_bytes(original)
 
     return restore
 
@@ -533,6 +633,11 @@ def main() -> int:
         help="temporarily use the TAS resource's public saves folder for automated local playback",
     )
     parser.add_argument(
+        "--controls-only-playback",
+        action="store_true",
+        help="temporarily disable recorded pose/velocity playback and apply only recorded controls",
+    )
+    parser.add_argument(
         "--use-real-vorbis",
         action="store_true",
         help="temporarily replace mtasa-blue's vorbisfile loader proxy with vorbisfile_real.dll",
@@ -556,7 +661,7 @@ def main() -> int:
     parser.add_argument(
         "--collision-diagnostics",
         action="store_true",
-        help="also observe ProcessCollision and ProcessControlCollisionCheck in the Frida route",
+        help="observe collision callbacks in the Frida route, or C++ ApplyCollisionAlt with --cpp-hook",
     )
     parser.add_argument(
         "--playback-output-name",
@@ -570,6 +675,7 @@ def main() -> int:
     _kill_targets()
     mta_bin = args.mta_bin.resolve()
     cpp_binary = args.output.with_suffix(args.output.suffix + ".cpp.bin")
+    cpp_collision_binary = args.output.with_suffix(args.output.suffix + ".collision.bin")
     timing_output = args.output.with_suffix(args.output.suffix + ".timing.jsonl")
     if args.cpp_hook or args.timing_only:
         timing_output.parent.mkdir(parents=True, exist_ok=True)
@@ -580,9 +686,17 @@ def main() -> int:
         if cpp_binary.exists():
             cpp_binary.unlink()
         os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT"] = str(cpp_binary.resolve())
+        if args.collision_diagnostics:
+            if cpp_collision_binary.exists():
+                cpp_collision_binary.unlink()
+            os.environ["MTA_NATIVE_COLLISION_ALT_CPP_OUTPUT"] = str(cpp_collision_binary.resolve())
     os.environ["MTA_BIN"] = str(mta_bin)
     restore_registry = _prepare_registry(mta_bin) if args.prepare_registry else (lambda: None)
     restore_tas_folder = _prepare_public_tas_folder(mta_bin) if args.prepare_tas_folder else (lambda: None)
+    restore_controls_only = (
+        _prepare_controls_only_playback(mta_bin)
+        if args.controls_only_playback else (lambda: None)
+    )
     restore_capture_output = (
         _prepare_native_capture_output(mta_bin, args.playback_output_name)
         if args.playback_output_name else (lambda: None)
@@ -617,9 +731,14 @@ def main() -> int:
             else "Frida entry hook"
         ),
         "cpp_binary": str(cpp_binary.resolve()) if args.cpp_hook else "",
+        "cpp_collision_binary": (
+            str(cpp_collision_binary.resolve())
+            if args.cpp_hook and args.collision_diagnostics else ""
+        ),
         "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
         "prepare_tas_folder": bool(args.prepare_tas_folder),
+        "controls_only_playback": bool(args.controls_only_playback),
         "playback_output_name": args.playback_output_name or "",
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
@@ -705,10 +824,12 @@ def main() -> int:
             restore_vorbis()
         finally:
             restore_tas_folder()
+            restore_controls_only()
             restore_capture_output()
             restore_registry()
             if args.cpp_hook:
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT", None)
+                os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_OUTPUT", None)
     print(f"native capture written to {args.output}")
     return 0
 

@@ -34,7 +34,7 @@ vehicles do not contaminate the Infernus stream.
    timer cadence. The validated local server also disabled anti-cheats `4,56`
    because the debug client was rejected by those checks.
 
-The tool's `--prepare-registry`, `--prepare-tas-folder`, `--playback-output-name`, and `--use-real-vorbis` options temporarily
+The tool's `--prepare-registry`, `--prepare-tas-folder`, `--controls-only-playback`, `--playback-output-name`, and `--use-real-vorbis` options temporarily
 point the 32-bit MTA registry location at the debug tree and replace the
 `vorbisfile.dll` loader proxy with the local `vorbisfile_real.dll`. Both are
 restored in the cleanup path. A local orchestrator script may be passed with
@@ -57,9 +57,13 @@ Frida route remains available for cross-checking. `--timing-only` runs the
 same automated playback without either ProcessWheel hook and reports timer
 samples, providing a no-hook timing control. The optional
 `--collision-diagnostics` flag adds read-only `ProcessCollision`,
-`CheckCollision`, `ProcessControlCollisionCheck`, and `ApplyForce` snapshots
-to the Frida route; it is intended for collision/source classification, not
-the minimal timing capture.
+`CheckCollision`, `ProcessControlCollisionCheck`, `ApplyForce`,
+`ApplyTurnForce`, and `ApplyCollisionAlt` snapshots to the Frida route; it is
+intended for collision/source classification, not the minimal timing capture.
+The recommended `--controls-only-playback` mode temporarily disables TAS pose,
+velocity, and angular-velocity playback and applies only recorded controls.
+Without it, legacy TAS playback imposes recorded state and native rows are
+state-forced diagnostics rather than an independent trajectory.
 
 Example:
 
@@ -70,12 +74,18 @@ python tools/native_processwheel_capture.py `
   --server-exe "D:\Users\Bernardo\Documents\mtasa-blue\Bin\server\MTA Server_d.exe" `
   --start-resource tas --start-resource native_capture `
   --orchestrator "C:\Users\berna\mtasa_deobfuscation\mta_bytecode_orchestrator.py" `
-  --prepare-registry --prepare-tas-folder --playback-output-name native-etnies-auto --use-real-vorbis `
+  --prepare-registry --prepare-tas-folder --controls-only-playback --playback-output-name native-etnies-auto --use-real-vorbis `
   --output "..\infernus-physics\generated\native-processwheel.jsonl"
 ```
 
 For the lower-overhead build, add `--cpp-hook`; after playback, convert the
-sibling binary stream:
+sibling binary stream. Combining `--cpp-hook --collision-diagnostics` also
+writes a `.collision.bin` stream from the two verified `ApplyCollisionAlt`
+call sites (`0x54C9FA`, `0x54CAC2`); convert it with
+`infernus-physics/tools/convert_native_collision_alt_cpp.py` when auditing
+GTA's direct collision response.
+
+After playback, convert the wheel sibling binary stream:
 
 ```powershell
 python ..\infernus-physics\tools\convert_native_processwheel_cpp.py `

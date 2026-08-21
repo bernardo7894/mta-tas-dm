@@ -244,9 +244,13 @@ hook on US 1.0 `CVehicle::ProcessWheel` (VA `0x6D6C00`, RVA `0x2D6C00`). A
 lower-overhead alternative in the local Debug `multiplayer_sa_d.dll` wraps the
 four `ProcessCarWheelPair` call sites and calls the original function unchanged.
 Both routes record direct entry arguments and clearly labeled private-state
-fields; neither alters physics or calls recorded positions. `contactSpeeds[4]`
+fields without changing the captured function arguments. `contactSpeeds[4]`
 are the `wheelContactSpeed` argument at ProcessWheel entry, after the preceding
-GTA suspension pass. The C++ route emits a binary batch stream converted by
+GTA suspension pass. The capture tool's recommended `--controls-only-playback`
+mode temporarily disables legacy TAS pose/velocity writes; without it, the TAS
+resource imposes recorded state and the native rows are state-forced diagnostics.
+With `--cpp-hook --collision-diagnostics`, the C++ route also records direct
+`ApplyCollisionAlt` outputs at call sites `0x54C9FA` and `0x54CAC2`. The C++ route emits a binary batch stream converted by
 `infernus-physics/tools/convert_native_processwheel_cpp.py`. The corresponding
 alignment/report tool is `infernus-physics/tools/align_native_processwheel.py`.
 A paired fps-limit-100 no-hook/C++ timing control matched at about
@@ -259,8 +263,10 @@ the instrumented debug client is otherwise rejected; neither setting is part
 of ordinary MTA recordings. `native_processwheel_capture.py --prepare-tas-folder`
 temporarily switches the local TAS resource to its public `saves` folder so
 large automated playback inputs are available without manual copying, then
-restores the file. Keep native rows separate from Lua `vehicleTelemetry` fields
-and preserve their provenance when merging diagnostic artifacts.
+restores the file. `--playback-output-name` selects a unique output name and
+`--controls-only-playback` restores independent control replay. Keep native rows
+separate from Lua `vehicleTelemetry` fields and preserve their provenance when
+merging diagnostic artifacts.
 
 Also inspect the actual Git diff before committing. This upstream file historically uses CRLF line endings; avoid creating enormous diffs consisting only of line-ending normalization.
 
