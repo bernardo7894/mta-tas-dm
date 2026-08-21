@@ -196,6 +196,36 @@ Useful initial data includes:
 
 `install-to-mta-server.bat` mirrors the modified `new\tas` resource into the local MTA server so repeated TAS development iterations are quick. It deliberately limits deployment to the server's `resources\tas` directory.
 
+## Automated Reference Capture
+
+The `tas` resource exposes two narrowly scoped, protected server exports:
+
+- `startReferenceCapture(mapName, recordName, outputName, targetPlayer)`;
+- `getReferenceCaptureStatus()`.
+
+`tools/mta_reference_capture.py` calls those exports through MTA's authenticated
+HTTP interface. The server selects the map and waits for the target race
+vehicle; a normal server-to-client event then makes the client load its
+private `.tas` file and run `/recordplayback`. No GUI focus, keyboard input, or
+server-console interaction is part of this workflow.
+
+The HTTP credential is an ordinary MTA server account, not a separate account
+system. Its ACL group must allow `general.http` and `resource.tas`; keep the
+latter limited to accounts intended to control captures. Use
+`MTA_HTTP_USER`/`MTA_HTTP_PASSWORD` or the helper's explicit options, for
+example:
+
+```powershell
+$env:MTA_HTTP_USER = "your-mta-account"
+$env:MTA_HTTP_PASSWORD = "your-mta-password"
+python tools/mta_reference_capture.py run `
+  "DM Skynet v5 Etnies II" previous_record new_telemetry
+```
+
+The server and client must already be running and the player must be
+connected. Use `--target-player` when more than one player is connected.
+Detailed export fields and ACL notes are in `new\tas\PHYSICS_EXPORT.md`.
+
 ## Testing Changes
 
 At minimum, ensure edited Lua remains syntactically valid.
@@ -205,6 +235,23 @@ The repository also has a Lua-stub telemetry harness under `tests/` covering
 stable wheel ordering, measured fields, and unavailable component/friction
 observables. The Python tests cover format-v2 parsing and format-v3 diagnostic
 joining.
+
+## Local native ProcessWheel capture
+
+For the missing transient GTA observable, `tools/native_processwheel_capture.py`
+uses the user's permissive `mtasa-blue` debug client and a pre-resume Frida
+hook on US 1.0 `CVehicle::ProcessWheel` (VA `0x6D6C00`, RVA `0x2D6C00`). The
+hook records direct entry arguments and clearly labeled private-state fields;
+it does not alter the function or call recorded positions. `contactSpeeds[4]`
+are the `wheelContactSpeed` argument at ProcessWheel entry, after the preceding
+GTA suspension pass. The corresponding alignment/report tool is
+`infernus-physics/tools/align_native_processwheel.py`.
+
+The local debug build currently needs its matching private capture server and
+resource setup. The server harness disables anti-cheats `4,56` because the
+instrumented debug client is otherwise rejected; this setting is not part of
+ordinary MTA recordings. Keep native rows separate from Lua `vehicleTelemetry`
+fields and preserve their provenance when merging diagnostic artifacts.
 
 Also inspect the actual Git diff before committing. This upstream file historically uses CRLF line endings; avoid creating enormous diffs consisting only of line-ending normalization.
 

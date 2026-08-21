@@ -79,6 +79,56 @@ standalone diagnostic report may show a clearly labeled front-minus-rear
 `componentRotation.root` Euler-Z candidate, but it is not treated as measured
 private GTA steering state until the traces establish that interpretation.
 
+## Direct native ProcessWheel instrumentation
+
+Lua cannot expose the transient `contactSpeeds[4]` array or the continuous
+private wheel state used by `CVehicle::ProcessWheel`. The workspace now includes
+`tools/native_processwheel_capture.py` for the intentionally permissive local
+`mtasa-blue` debug client. It installs a reversible Frida `Interceptor` before a
+Frida-spawned US 1.0 `gta_sa.exe` resumes; it does not replace the wheel
+function or modify its arguments.
+
+The hook target is `gta_sa.exe` VA `0x6D6C00` (`RVA 0x2D6C00` from image base
+`0x400000`), `CVehicle::ProcessWheel`. At entry it records, when the object
+model is 411:
+
+- the four `CVector&` arguments (`wheelFwd`, `wheelRight`, `wheelContactSpeed`,
+  and `wheelContactPoint`);
+- `wheelsOnGround`, thrust, brake, adhesion, wheel ID, wheel speed pointer,
+  wheel state pointer, and wheel status;
+- private suspension compression arrays at `CAutomobile` offsets `0x7D4`,
+  `0x7E4`, and `0x7F4` (`current`, `previous`, and `m_WheelCounts`);
+- actual `m_fSteerAngle` at `0x494`, raw steering at `0x58C`, contact counts,
+  model-origin position/matrix, and before/after velocity deltas.
+
+The native JSONL rows are explicitly marked `gta-native-pre-ProcessWheel` and
+must not be presented as Lua-derived telemetry. The corresponding alignment
+helper is owned by `infernus-physics`:
+
+```powershell
+python tools/native_processwheel_capture.py `
+  --gta-exe "D:\\Users\\Bernardo\\Documents\\mtasa-blue\\Bin\\gta_sa.exe" `
+  --mta-bin "D:\\Users\\Bernardo\\Documents\\mtasa-blue\\Bin" `
+  --server-exe "D:\\Users\\Bernardo\\Documents\\mtasa-blue\\Bin\\server\\MTA Server_d.exe" `
+  --start-resource tas --start-resource native_capture `
+  --orchestrator "C:\\Users\\berna\\mtasa_deobfuscation\\mta_bytecode_orchestrator.py" `
+  --output "..\\infernus-physics\\generated\\native-processwheel.jsonl"
+
+python ..\\infernus-physics\\tools\\align_native_processwheel.py `
+  "C:\\path\\to\\etnies-ii-wheel-telemetry-v3.physics.jsonl" `
+  "..\\infernus-physics\\generated\\native-processwheel.jsonl" `
+  --causal "..\\infernus-physics\\generated\\etnies-ii-wheel-telemetry-v3.causal-instrumented-final-275-350.json" `
+  --output "..\\infernus-physics\\generated\\native-causal-aligned.json"
+```
+
+The debug server must disable only the anti-cheats that reject the local
+instrumented client (the current local harness uses AC `4,56`), and the debug
+client must use the matching local server/resource setup. The local
+`mtasa-blue` Debug build also requests the private connection from
+`CCore::DoPostFramePulse` after the GUI/network stack is ready; this is a
+harness-only launch change, not ordinary TAS behavior. These are local harness
+settings, not changes to ordinary recordings or production servers.
+
 ## Workflow
 
 1. Start the patched `tas` resource.
@@ -97,6 +147,44 @@ The first JSONL line is recording metadata; subsequent lines are frames.
 For replica testing, initialize the new engine from the first frame and replay
 only the recorded controls. Position, orientation and velocity are ground-truth
 comparison targets and should not be forced onto the replica after initialization.
+
+## Automated reference playback
+
+The repetitive map/load/playback sequence can be driven without using the MTA
+GUI. The patched `tas` server script exports an authenticated HTTP API that:
+
+1. changes the `race` gamemode to the requested map;
+2. waits for the target player's race vehicle;
+3. tells the TAS client to load its local `.tas` file; and
+4. starts `/recordplayback`, which saves fresh telemetry as `.physics.jsonl`.
+
+The small client for that API is `tools/mta_reference_capture.py`. An “MTA
+HTTP account” is not a separate service account: it is an ordinary MTA server
+account that is allowed to use the HTTP interface. Set
+`MTA_HTTP_USER` and `MTA_HTTP_PASSWORD` to that account's normal MTA login
+credentials, then run from the repository root:
+
+```powershell
+$env:MTA_HTTP_USER = "your-mta-account"
+$env:MTA_HTTP_PASSWORD = "your-mta-password"
+python mta-tas-dm/tools/mta_reference_capture.py run `
+  "DM Skynet v5 Etnies II" previous_record new_telemetry
+```
+
+The account's ACL group needs both `general.http` and `resource.tas`; the
+latter is required because the two TAS automation exports are marked
+`protected="true"`. Grant `resource.tas` only to the account/group that should
+control captures. The local test server uses its existing Admin account and
+has this right persisted in its `acl.xml`; other installations must grant the
+same right in their own ACL.
+
+Use `start` instead of `run` to return immediately, or `status` to query the
+current request. The MTA server and client must already be running and
+connected. This control path uses authenticated HTTP and normal MTA
+server-to-client events; it does not use Windows focus, keyboard input, or the
+server-console window. With a single connected player the target is inferred.
+On a multi-player server pass `--target-player "name"`. The saved output is
+`<name>.physics.jsonl` in the client's normal TAS private save area.
 
 ## Wheel diagnostic comparison
 

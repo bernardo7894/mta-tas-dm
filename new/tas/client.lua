@@ -24,6 +24,7 @@ local tas = {
 		physics_steer_last_tick = nil,
 		physics_steer_initialized = false,
 		physics_handling = nil,
+		automation = nil, -- server-orchestrated map/load/playback capture
 		--recording_fbf = false, -- [UNUSED]
 		--fbf_switch = 0, -- [UNUSED]
 		
@@ -711,6 +712,106 @@ function tas.capture_wheel_telemetry(vehicle, matrix, position, velocity, angula
 	}
 end
 
+-- // Server-orchestrated reference capture
+function tas.automation_report(state, message)
+	local automation = tas.var.automation
+	if not automation then return end
+	triggerServerEvent("tas:automationStatus", localPlayer, automation.id, state, tostring(message or ""))
+end
+
+function tas.automation_fail(message)
+	if not tas.var.automation then return end
+	tas.automation_report("failed", message)
+	if tas.var.automation.playbackTimer and isTimer(tas.var.automation.playbackTimer) then
+		killTimer(tas.var.automation.playbackTimer)
+	end
+	tas.var.automation = nil
+end
+
+function tas.automation_start_playback()
+	local automation = tas.var.automation
+	if not automation then return end
+	if tas.var.recording or tas.var.playbacking then
+		tas.automation_fail("TAS is already recording or playbacking")
+		return
+	end
+
+	local vehicle = tas.cveh(localPlayer)
+	if not vehicle then
+		automation.retries = (automation.retries or 0) + 1
+		if automation.retries > 40 then
+			tas.automation_fail("race vehicle disappeared before playback started")
+			return
+		end
+		automation.playbackTimer = setTimer(tas.automation_start_playback, 250, 1)
+		return
+	end
+
+	automation.playbackTimer = nil
+	local outputFile = (tas.settings.usePrivateFolder == true and "@" or "") .. "saves/" .. automation.outputName .. ".physics.jsonl"
+	if fileExists(outputFile) then fileDelete(outputFile) end
+	executeCommandHandler(tas.registered_commands.record_playback, automation.outputName)
+	if tas.var.playback_recording then
+		tas.automation_report("capturing", "Playback is running while telemetry is captured")
+	else
+		tas.automation_fail("recordplayback could not be started")
+	end
+end
+
+function tas.automation_start(id, recordName, outputName)
+	if source ~= resourceRoot then return end
+	if type(id) ~= "number" or type(recordName) ~= "string" or type(outputName) ~= "string" then return end
+	if tas.var.automation then
+		tas.automation_fail("a previous automation request is still active")
+		return
+	end
+	if tas.var.recording or tas.var.playbacking then
+		triggerServerEvent("tas:automationStatus", localPlayer, id, "failed", "TAS is already recording or playbacking")
+		return
+	end
+
+	local fileTarget = (tas.settings.usePrivateFolder == true and "@" or "") .. "saves/" .. recordName .. ".tas"
+	if not fileExists(fileTarget) then
+		triggerServerEvent("tas:automationStatus", localPlayer, id, "failed", "client-side TAS file does not exist: "..recordName)
+		return
+	end
+
+	tas.var.automation = {
+		id = id,
+		recordName = recordName,
+		outputName = outputName,
+		retries = 0,
+	}
+	tas.automation_report("loading_record", "Loading "..recordName..".tas")
+	executeCommandHandler(tas.registered_commands.load_record, recordName)
+	if #tas.data < 1 then
+		tas.automation_fail("the TAS recording loaded no frames")
+		return
+	end
+
+	tas.automation_report("record_loaded", "Loaded "..tostring(#tas.data).." frames")
+	tas.var.automation.playbackTimer = setTimer(tas.automation_start_playback, 250, 1)
+end
+
+addEvent("tas:automationStart", true)
+addEventHandler("tas:automationStart", root, function(id, recordName, outputName)
+	tas.automation_start(id, recordName, outputName)
+end)
+
+addEvent("tas:automationAbort", true)
+addEventHandler("tas:automationAbort", root, function(id, message)
+	if source ~= resourceRoot then return end
+	local automation = tas.var.automation
+	if not automation or automation.id ~= id then return end
+	if automation.playbackTimer and isTimer(automation.playbackTimer) then
+		killTimer(automation.playbackTimer)
+	end
+	if tas.var.playback_recording then tas.finish_playback_recording(false) end
+	if tas.var.playbacking then executeCommandHandler(tas.registered_commands.playback) end
+	tas.var.automation = nil
+	tas.prompt("Reference capture aborted: "..tostring(message or "server request failed"), 255, 100, 100)
+end)
+
 -- // Playback ground-contact capture
 function tas.begin_playback_recording(name, vehicle, fresh_playback)
 	tas.var.playback_recording = true
@@ -775,7 +876,7 @@ function tas.capture_playback_frame(vehicle, frame_data, deltaTime)
 	frame_data.x.playbackCapture = true
 end
 
-function tas.finish_playback_recording()
+function tas.finish_playback_recording(completed)
 	if not tas.var.playback_recording then return end
 
 	local name = tas.var.playback_record_name
@@ -797,6 +898,16 @@ function tas.finish_playback_recording()
 		executeCommandHandler(tas.registered_commands.save_analysis, name)
 	end
 	tas.analysis.export_frame_limit = nil
+
+	local automation = tas.var.automation
+	if automation and automation.outputName == name then
+		local outputFile = (tas.settings.usePrivateFolder == true and "@" or "") .. "saves/" .. name .. ".physics.jsonl"
+		local saved = completed ~= false and fileExists(outputFile)
+		local state = saved and "completed" or (completed == false and "cancelled" or "failed")
+		local message = saved and "Playback capture saved" or (completed == false and "Playback capture stopped" or "Physics export was not created")
+		tas.automation_report(state, message)
+		tas.var.automation = nil
+	end
 end
 
 -- // Local Functions End
@@ -1042,7 +1153,7 @@ function tas.commands(cmd, ...)
 		if tas.var.rewinding or tas.timers.rewind_load then tas.prompt("Playbacking failed, please wait for the rewinding trigger!", 255, 100, 100) return end
 		
 		if tas.var.playbacking then
-			if tas.var.playback_recording then tas.finish_playback_recording() end
+			if tas.var.playback_recording then tas.finish_playback_recording(false) end
 			removeEventHandler((tas.settings.playbackPreRender == true and "onClientPreRender" or "onClientRender"), root, tas.render_playback)
 			tas.var.playbacking = false
 			tas.resetBinds()
@@ -1078,7 +1189,7 @@ function tas.commands(cmd, ...)
 	elseif cmd == tas.registered_commands.record_playback then
 
 		if tas.var.playback_recording then
-			tas.finish_playback_recording()
+			tas.finish_playback_recording(false)
 			return
 		end
 		if args[1] == nil then
@@ -2586,6 +2697,7 @@ function tas.render_playback(deltaTime)
 			if tas.var.play_frame > limit then 
 				tas.var.play_frame = limit 
 				if tas.settings.stopPlaybackFinish or capture_all_frames then
+					if tas.var.playback_recording then tas.finish_playback_recording(true) end
 					executeCommandHandler(tas.registered_commands.playback)
 					return
 				end
@@ -2624,7 +2736,7 @@ function tas.render_playback(deltaTime)
 				
 				if tas.settings.hunterFinish then
 					if model == 425 or frame_data.m == 425 then
-						if tas.var.playback_recording then tas.finish_playback_recording() end
+						if tas.var.playback_recording then tas.finish_playback_recording(false) end
 						removeEventHandler((tas.settings.playbackPreRender == true and "onClientPreRender" or "onClientRender"), root, tas.render_playback)
 						tas.var.playbacking = false
 						tas.resetBinds()
@@ -2683,7 +2795,7 @@ function tas.render_playback(deltaTime)
 	
 	else
 		
-		if tas.var.playback_recording then tas.finish_playback_recording() end
+		if tas.var.playback_recording then tas.finish_playback_recording(false) end
 		removeEventHandler((tas.settings.playbackPreRender == true and "onClientPreRender" or "onClientRender"), root, tas.render_playback)
 		tas.var.playbacking = false
 		tas.resetBinds()

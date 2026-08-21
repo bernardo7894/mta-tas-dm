@@ -7,6 +7,8 @@
     <script src="updater.lua" type="server" />
 
     <export function="getTASData" type="client"/>
+    <export function="startReferenceCapture" type="server" http="true" protected="true" />
+    <export function="getReferenceCaptureStatus" type="server" http="true" protected="true" />
 	
     <aclrequest>
         <right name="function.fetchRemote" access="true" />
