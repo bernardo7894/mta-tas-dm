@@ -249,7 +249,8 @@ are the `wheelContactSpeed` argument at ProcessWheel entry, after the preceding
 GTA suspension pass. The C++ route emits a binary batch stream converted by
 `infernus-physics/tools/convert_native_processwheel_cpp.py`. The corresponding
 alignment/report tool is `infernus-physics/tools/align_native_processwheel.py`.
-A no-hook/C++ timing control matched at about `961.647` game-ms/s.
+A paired fps-limit-100 no-hook/C++ timing control matched at about
+`995.003` versus `994.081` game-ms/s.
 
 The local debug build currently needs its matching private capture server and
 resource setup. The server harness uses `<fpslimit>100</fpslimit>` to match the
