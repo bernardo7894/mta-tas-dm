@@ -148,6 +148,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const applyForce = main.base.add(0x142B50);
     const applyTurnForce = main.base.add(0x142A50);
     const applyCollisionAlt = main.base.add(0x144D50);
+    const processFriction = main.base.add(0x1483D0);
+    const applyFrictionForce = main.base.add(0x143220);
     const gameFrameCounter = main.base.add(0x77CB4C);
     const timerOldStep = main.base.add(0x77CB54);
     const timerStepNonClipped = main.base.add(0x77CB58);
@@ -316,6 +318,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             entityCollisionProcess:null,
                             suspensionAtProcessControlEntry:INSTALL_COLLISION_DIAGNOSTICS ? suspensionSnapshot(vehicle) : null,
                             suspensionProcess:null,
+                            frictionProcess:null,
+                            frictionForceEvents:[],
                             applyForces:[],
                             applyTurnForces:[],
                             collisionAlternates:[],
@@ -380,6 +384,60 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                         before:this.nativeSuspensionBefore,
                         after:suspensionSnapshot(this.nativeSuspensionVehicle),
                     }};
+                }} catch(_) {{}}
+            }}
+        }});
+        Interceptor.attach(processFriction, {{
+            onEnter() {{
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativeFrictionKey = vehicle.toString();
+                    this.nativeFrictionVehicle = vehicle;
+                    this.nativeFrictionBefore = physicalSnapshot(vehicle);
+                }} catch(_) {{}}
+            }},
+            onLeave() {{
+                if (!this.nativeFrictionKey) return;
+                try {{
+                    const control = controlStates.get(this.nativeFrictionKey);
+                    if (control) control.frictionProcess = {{
+                        before:this.nativeFrictionBefore,
+                        after:physicalSnapshot(this.nativeFrictionVehicle),
+                    }};
+                }} catch(_) {{}}
+            }}
+        }});
+        Interceptor.attach(applyFrictionForce, {{
+            onEnter() {{
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativeFrictionForceKey = vehicle.toString();
+                    this.nativeFrictionForceVehicle = vehicle;
+                    this.nativeFrictionForceBefore = physicalSnapshot(vehicle);
+                    this.nativeFrictionForce = [
+                        f(this.context.esp.add(4)),
+                        f(this.context.esp.add(8)),
+                        f(this.context.esp.add(12)),
+                    ];
+                    this.nativeFrictionPoint = [
+                        f(this.context.esp.add(16)),
+                        f(this.context.esp.add(20)),
+                        f(this.context.esp.add(24)),
+                    ];
+                }} catch(_) {{}}
+            }},
+            onLeave() {{
+                if (!this.nativeFrictionForceKey) return;
+                try {{
+                    const control = controlStates.get(this.nativeFrictionForceKey);
+                    if (control) control.frictionForceEvents.push({{
+                        force:this.nativeFrictionForce,
+                        point:this.nativeFrictionPoint,
+                        before:this.nativeFrictionForceBefore,
+                        after:physicalSnapshot(this.nativeFrictionForceVehicle),
+                    }});
                 }} catch(_) {{}}
             }}
         }});
@@ -592,7 +650,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     gasPedal:f(vehicle.add(0x49C)), brakePedal:f(vehicle.add(0x4A0)),
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
-                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,timerOldStep:c.timerOldStep,timerStepNonClipped:c.timerStepNonClipped,timerStep:c.timerStep,currentGear:c.currentGear,gearChangeCount:c.gearChangeCount,inertiaValue1:c.inertiaValue1,inertiaValue2:c.inertiaValue2,rawSteerAngle:c.rawSteerAngle,steerAngle:c.steerAngle,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,wheelStateMemory:c.wheelStateMemory,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,entityCollisionProcess:c.entityCollisionProcess,suspensionAtProcessControlEntry:c.suspensionAtProcessControlEntry,suspensionProcess:c.suspensionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces,applyTurnForces:c.applyTurnForces,collisionAlternates:c.collisionAlternates}} : null;}})(),
+                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,timerOldStep:c.timerOldStep,timerStepNonClipped:c.timerStepNonClipped,timerStep:c.timerStep,currentGear:c.currentGear,gearChangeCount:c.gearChangeCount,inertiaValue1:c.inertiaValue1,inertiaValue2:c.inertiaValue2,rawSteerAngle:c.rawSteerAngle,steerAngle:c.steerAngle,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,wheelStateMemory:c.wheelStateMemory,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,entityCollisionProcess:c.entityCollisionProcess,suspensionAtProcessControlEntry:c.suspensionAtProcessControlEntry,suspensionProcess:c.suspensionProcess,frictionProcess:c.frictionProcess,frictionForceEvents:c.frictionForceEvents,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces,applyTurnForces:c.applyTurnForces,collisionAlternates:c.collisionAlternates}} : null;}})(),
                     controlExit:null,
                     linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular,
                     staticAlreadySkiddingBefore:INSTALL_STATIC_SKID_DIAGNOSTICS ? u8(staticAlreadySkidding) : null
