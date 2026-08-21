@@ -163,6 +163,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const s32 = p => {{ try {{ return p.readS32(); }} catch(_) {{ return null; }} }};
     const vec = p => {{ try {{ return [p.readFloat(),p.add(4).readFloat(),p.add(8).readFloat()]; }} catch(_) {{ return null; }} }};
     const array4 = p => [0,1,2,3].map(i => f(p.add(i * 4)));
+    const u32Array4 = p => [0,1,2,3].map(i => {{ try {{ return p.add(i * 4).readU32(); }} catch(_) {{ return null; }} }});
     const dot = (a,b) => a && b ? a[0]*b[0]+a[1]*b[1]+a[2]*b[2] : null;
     const delta = (a,b) => a && b ? a.map((v,i) => v-b[i]) : null;
     const suspensionSnapshot = vehicle => ({{
@@ -232,6 +233,11 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                                     for (let i = 0; i < Math.min(4, values.length); i++)
                                         vehicle.add(offset + i * 4).writeFloat(Number(values[i]));
                                 }};
+                                const writeU32Array = (offset, values) => {{
+                                    if (!Array.isArray(values)) return;
+                                    for (let i = 0; i < Math.min(4, values.length); i++)
+                                        vehicle.add(offset + i * 4).writeU32(Number(values[i]));
+                                }};
                                 const writeVector = (pointer, value) => {{
                                     if (!Array.isArray(value) || value.length < 3) return;
                                     pointer.writeFloat(Number(value[0]));
@@ -254,6 +260,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                                     writeArray(0x7D4, compressionInput);
                                     writeArray(0x7E4, internal.suspensionCompressionPrevious);
                                     writeArray(0x7F4, internal.wheelCounts);
+                                    writeU32Array(0x968, internal.wheelStates);
                                     if (Array.isArray(internal.wheelCollisionPoints))
                                         for (let i = 0; i < Math.min(4, internal.wheelCollisionPoints.length); i++)
                                             writeVector(vehicle.add(0x724 + i * 0x2C), internal.wheelCollisionPoints[i]);
@@ -303,6 +310,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             vtable:(()=>{{try{{return vehicle.readPointer().toString()}}catch(_){{return null}}}})(),
                             vtableCollisionCheck:(()=>{{try{{return vehicle.readPointer().add(0x5C).readPointer().toString()}}catch(_){{return null}}}})(),
                             vehicleFlagsByte3:u8(vehicle.add(0x42B)),
+                            wheelStateMemory:u32Array4(vehicle.add(0x968)),
                             audioChangingGear:((u8(vehicle.add(0x42B)) || 0) & 0x20) !== 0,
                             collisionProcess:pendingCollisions.get(key) || null,
                             entityCollisionProcess:null,
@@ -584,7 +592,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     gasPedal:f(vehicle.add(0x49C)), brakePedal:f(vehicle.add(0x4A0)),
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
-                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,timerOldStep:c.timerOldStep,timerStepNonClipped:c.timerStepNonClipped,timerStep:c.timerStep,currentGear:c.currentGear,gearChangeCount:c.gearChangeCount,inertiaValue1:c.inertiaValue1,inertiaValue2:c.inertiaValue2,rawSteerAngle:c.rawSteerAngle,steerAngle:c.steerAngle,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,entityCollisionProcess:c.entityCollisionProcess,suspensionAtProcessControlEntry:c.suspensionAtProcessControlEntry,suspensionProcess:c.suspensionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces,applyTurnForces:c.applyTurnForces,collisionAlternates:c.collisionAlternates}} : null;}})(),
+                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,timerOldStep:c.timerOldStep,timerStepNonClipped:c.timerStepNonClipped,timerStep:c.timerStep,currentGear:c.currentGear,gearChangeCount:c.gearChangeCount,inertiaValue1:c.inertiaValue1,inertiaValue2:c.inertiaValue2,rawSteerAngle:c.rawSteerAngle,steerAngle:c.steerAngle,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,frictionMoveVelocity:c.frictionMoveVelocity,frictionAngularVelocity:c.frictionAngularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,wheelStateMemory:c.wheelStateMemory,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,entityCollisionProcess:c.entityCollisionProcess,suspensionAtProcessControlEntry:c.suspensionAtProcessControlEntry,suspensionProcess:c.suspensionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner,applyForces:c.applyForces,applyTurnForces:c.applyTurnForces,collisionAlternates:c.collisionAlternates}} : null;}})(),
                     controlExit:null,
                     linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular,
                     staticAlreadySkiddingBefore:INSTALL_STATIC_SKID_DIAGNOSTICS ? u8(staticAlreadySkidding) : null
@@ -840,17 +848,23 @@ def _prepare_one_tick_resource(mta_bin: Path, config: dict[str, Any]) -> Any:
     server = original_server.decode("utf-8")
     client = original_client.decode("utf-8")
     marker = '    triggerClientEvent(player, "nativeCapture:start", resourceRoot, "etnies-native", "native-etnies")'
+    try:
+        one_tick_delay_ms = max(0, int(config.get("oneTickDelayMs", 1000)))
+    except (AttributeError, TypeError, ValueError):
+        one_tick_delay_ms = 1000
+    newline = "\r\n" if "\r\n" in server else "\n"
+    marker = marker.replace("\n", newline)
     replacement = (
         "    setTimer(function()\n"
         "        if isElement(player) then\n"
         "            triggerClientEvent(player, \"nativeCapture:oneTick\", resourceRoot, oneTickConfig)\n"
         "        end\n"
-        "    end, 1000, 1)"
-    )
+        f"    end, {one_tick_delay_ms}, 1)"
+    ).replace("\n", newline)
     if server.count(marker) != 1:
         return lambda: None
     server = (
-        "local oneTickConfig = " + encoded + "\n" +
+        "local oneTickConfig = " + encoded + newline +
         server.replace(marker, replacement, 1)
     )
     client += r'''
