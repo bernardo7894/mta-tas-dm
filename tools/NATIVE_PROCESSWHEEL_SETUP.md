@@ -61,9 +61,12 @@ The default Frida route remains available for cross-checking. `--timing-only` ru
 same automated playback without either ProcessWheel hook and reports timer
 samples, providing a no-hook timing control. The optional
 `--collision-diagnostics` flag adds read-only `ProcessCollision`,
+`ProcessEntityCollision` (`0x6ACE70`), `ProcessSuspension` (`0x6AFB10`),
 `CheckCollision`, `ProcessControlCollisionCheck`, `ApplyForce`,
 `ApplyTurnForce`, and `ApplyCollisionAlt` snapshots to the Frida route; it is
 intended for collision/source classification, not the minimal timing capture.
+The suspension snapshots include compression/count arrays and private wheel
+collision points before/after the source stage.
 The recommended `--controls-only-playback` mode temporarily disables TAS pose,
 velocity, and angular-velocity playback and applies only recorded controls.
 Without it, legacy TAS playback imposes recorded state and native rows are
@@ -79,9 +82,18 @@ ordinary C++ rows use `0xFF` sentinels for those optional bytes. The separate
 `--one-tick-config <json>` mode bypasses TAS playback, writes one public
 state/control sample, and lets GTA execute naturally; optional `nativeInternal`
 values initialize directly known private state before the matching
-`ProcessControl` call. Compare its `controlEntry`/`controlExit` rows with the
-simulator's pre-step diagnostic; it is state-input evidence, not a continuous
-trajectory benchmark.
+`ProcessControl` call. Native ProcessWheel compression is post-normalized;
+therefore `nativeInternal.suspensionCompressionInputConvention` must explicitly
+be `raw-line-fraction` or `normalized-post-process-control`. Raw-line input is
+normalized by GTA at the source `ProcessControl` boundary. The
+`bVehicleColProcessed` bit is byte `0x42B`, bit 0. The hook records
+`CTimer::GetTimeStep` at `0x77CB5C`; pass that observed multiplier to
+`tools/run_one_tick_simulator.py --native-timer-step`, and pass the same config
+with `--native-internal-config` for a same-hidden-state local comparison.
+Compare its `controlEntry`/`controlExit` rows with the simulator's pre-step
+diagnostic; it is state-input evidence, not a continuous trajectory benchmark.
+The comparator maps native wheel order `FL,RL,FR,RR` to simulator ray order
+`FL,FR,RL,RR` explicitly.
 
 Example:
 
