@@ -209,6 +209,60 @@ def _kill_targets() -> None:
                 pass
 
 
+def _prepare_registry(mta_bin: Path) -> Any:
+    """Temporarily point the 32-bit MTA registry path at the debug tree."""
+    import winreg
+
+    key_path = r"SOFTWARE\WOW6432Node\Multi Theft Auto: San Andreas All\1.6"
+    key = winreg.OpenKey(
+        winreg.HKEY_LOCAL_MACHINE,
+        key_path,
+        0,
+        winreg.KEY_READ | winreg.KEY_WRITE,
+    )
+    try:
+        old_value, old_type = winreg.QueryValueEx(key, "Last Run Location")
+    except FileNotFoundError:
+        old_value, old_type = None, winreg.REG_SZ
+    winreg.SetValueEx(key, "Last Run Location", 0, winreg.REG_SZ, str(mta_bin))
+    winreg.CloseKey(key)
+
+    def restore() -> None:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            key_path,
+            0,
+            winreg.KEY_SET_VALUE,
+        ) as restore_key:
+            if old_value is None:
+                try:
+                    winreg.DeleteValue(restore_key, "Last Run Location")
+                except FileNotFoundError:
+                    pass
+            else:
+                winreg.SetValueEx(restore_key, "Last Run Location", 0, old_type, old_value)
+
+    return restore
+
+
+def _prepare_real_vorbis(mta_bin: Path) -> Any:
+    """Temporarily disable the loader proxy so Frida owns MTA bootstrap."""
+    original = mta_bin / "vorbisfile.dll"
+    real = mta_bin / "vorbisfile_real.dll"
+    backup = mta_bin / "vorbisfile.native-capture-original.dll"
+    if not original.exists() or not real.exists() or original.read_bytes() == real.read_bytes():
+        return lambda: None
+    if not backup.exists():
+        backup.write_bytes(original.read_bytes())
+    original.write_bytes(real.read_bytes())
+
+    def restore() -> None:
+        if backup.exists():
+            original.write_bytes(backup.read_bytes())
+
+    return restore
+
+
 def _start_server(path: Path, commands: list[str]) -> tuple[subprocess.Popen[str], threading.Thread]:
     process = subprocess.Popen(
         [str(path)], cwd=str(path.parent), stdin=subprocess.PIPE,
@@ -248,12 +302,25 @@ def main() -> int:
             "its proven Frida-native bootstrap/survival hooks are used when supplied"
         ),
     )
+    parser.add_argument(
+        "--prepare-registry",
+        action="store_true",
+        help="temporarily point HKLM's 32-bit MTA 1.6 Last Run Location at --mta-bin",
+    )
+    parser.add_argument(
+        "--use-real-vorbis",
+        action="store_true",
+        help="temporarily replace mtasa-blue's vorbisfile loader proxy with vorbisfile_real.dll",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--duration", type=float, default=240.0)
     parser.add_argument("--label", default="native-processwheel")
     args = parser.parse_args()
     _kill_targets()
-    os.environ["MTA_BIN"] = str(args.mta_bin.resolve())
+    mta_bin = args.mta_bin.resolve()
+    os.environ["MTA_BIN"] = str(mta_bin)
+    restore_registry = _prepare_registry(mta_bin) if args.prepare_registry else (lambda: None)
+    restore_vorbis = _prepare_real_vorbis(mta_bin) if args.use_real_vorbis else (lambda: None)
     server = None
     if args.server_exe:
         server, _ = _start_server(
@@ -336,6 +403,10 @@ def main() -> int:
                 server.wait(timeout=10)
             except Exception:
                 server.kill()
+        try:
+            restore_vorbis()
+        finally:
+            restore_registry()
     print(f"native capture written to {args.output}")
     return 0
 
