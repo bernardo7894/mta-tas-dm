@@ -261,7 +261,11 @@ before/after state; these are direct collision-stage diagnostics and do not
 make `m_wheelColPoint` a guaranteed fresh ray result. `--playback-start-delay-ms`
 can warm the native timer before source playback, and `--capture-from-first-gas`
 buffers Frida rows until the first nonzero pedal; both values are recorded in
-metadata. `--one-tick-config` is a separate
+metadata. `--suspension-stage-only` is a Frida-only reduced collision mode
+that installs only the entity-collision and ProcessSuspension stage hooks;
+its metadata must retain `suspension_stage_only=true`. The timing probe emits
+`timerOldStep`, `timerStepNonClipped`, and `timerStep` alongside game time.
+`--one-tick-config` is a separate
 state-input diagnostic that writes one public state/control sample and captures
 native `ProcessControl` entry/exit; it is not continuous independent evidence.
 Frida rows additionally snapshot the runtime handling engine acceleration,
@@ -289,7 +293,11 @@ large automated playback inputs are available without manual copying, then
 restores the file. `--playback-output-name` selects a unique output name and
 `--controls-only-playback` restores independent control replay. Keep native rows
 separate from Lua `vehicleTelemetry` fields and preserve their provenance when
-merging diagnostic artifacts.
+merging diagnostic artifacts. A `*** NETWORK TROUBLE ***` overlay invalidates a
+capture: `CNetAPI::DoPulse` raises it after a recent puresync enqueue and 10
+seconds without processed return-sync, then freezes controls and vehicle
+move/turn state. It is client recovery behavior, not a physics result; apply
+the timing gate and reject the affected stream.
 
 Also inspect the actual Git diff before committing. This upstream file historically uses CRLF line endings; avoid creating enormous diffs consisting only of line-ending normalization.
 
