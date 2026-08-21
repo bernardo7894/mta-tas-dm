@@ -46,7 +46,13 @@ def _js_string(value: str) -> str:
     return json.dumps(value.replace("\\", "/"))
 
 
-def _native_script(mta_bin: Path, output_label: str, *, install_wheel_hook: bool = True) -> str:
+def _native_script(
+    mta_bin: Path,
+    output_label: str,
+    *,
+    install_wheel_hook: bool = True,
+    collision_diagnostics: bool = False,
+) -> str:
     bin_dir = _js_string(str(mta_bin))
     mta_dir = _js_string(str(mta_bin / "MTA"))
     return f"""
@@ -55,6 +61,7 @@ const BIN_DIR = {bin_dir};
 const MTA_DIR = {mta_dir};
 const OUTPUT_LABEL = {_js_string(output_label)};
 const INSTALL_NATIVE_WHEEL_HOOK = {str(install_wheel_hook).lower()};
+const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
 let bootstrapDone = false;
 
 Process.setExceptionHandler(function(details) {{
@@ -129,10 +136,13 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const main = Process.mainModule;
     const processWheel = main.base.add({PROCESS_WHEEL_RVA});
     const processControl = main.base.add({PROCESS_CONTROL_RVA});
+    const processControlCollisionCheck = main.base.add(0x2A29C0);
+    const processCollision = main.base.add(0x14DFB0);
     const gameFrameCounter = main.base.add(0x77CB4C);
     const gameTimeMs = main.base.add(0x77CB84);
     let frame = 0, processCalls = 0, wheelCalls = 0, batch = [];
     const controlStates = new Map();
+    const pendingCollisions = new Map();
     const f = p => {{ try {{ return p.readFloat(); }} catch(_) {{ return null; }} }};
     const u8 = p => {{ try {{ return p.readU8(); }} catch(_) {{ return null; }} }};
     const s32 = p => {{ try {{ return p.readS32(); }} catch(_) {{ return null; }} }};
@@ -140,6 +150,15 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const array4 = p => [0,1,2,3].map(i => f(p.add(i * 4)));
     const dot = (a,b) => a && b ? a[0]*b[0]+a[1]*b[1]+a[2]*b[2] : null;
     const delta = (a,b) => a && b ? a.map((v,i) => v-b[i]) : null;
+    const physicalSnapshot = vehicle => ({{
+        linearVelocity:vec(vehicle.add(0x44)),
+        angularVelocity:vec(vehicle.add(0x50)),
+        position:vec(vehicle.add(0x04)),
+        collisionPosition:vec(vehicle.add(0xEC)),
+        collisionImpactVelocity:vec(vehicle.add(0xE0)),
+        damageImpulse:f(vehicle.add(0xD8)),
+        collidedEntity:(()=>{{try{{return vehicle.add(0xDC).readPointer().toString()}}catch(_){{return null}}}})(),
+    }});
     const expectedWheelEntry = [0x83,0xec,0x48,0xd9,0x05];
     for (let i=0; i<expectedWheelEntry.length; i++)
         if (processWheel.add(i).readU8() !== expectedWheelEntry[i])
@@ -158,12 +177,64 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
                             linearVelocity:vec(vehicle.add(0x44)),
                             angularVelocity:vec(vehicle.add(0x50)),
+                            vtable:(()=>{{try{{return vehicle.readPointer().toString()}}catch(_){{return null}}}})(),
+                            vtableCollisionCheck:(()=>{{try{{return vehicle.readPointer().add(0x5C).readPointer().toString()}}catch(_){{return null}}}})(),
+                            collisionProcess:pendingCollisions.get(key) || null,
                         }});
+                        pendingCollisions.delete(key);
                         this.nativeControlKey = key;
                     }}
                 }} catch(_) {{}}
+            }},
+        }});
+        if (INSTALL_COLLISION_DIAGNOSTICS) {{
+        Interceptor.attach(processCollision, {{
+            onEnter() {{
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativeCollisionKey = vehicle.toString();
+                    this.nativeCollisionVehicle = vehicle;
+                    this.nativeCollisionBefore = physicalSnapshot(vehicle);
+                }} catch(_) {{}}
+            }},
+            onLeave() {{
+                if (!this.nativeCollisionKey) return;
+                try {{
+                    pendingCollisions.set(this.nativeCollisionKey, {{
+                        before:this.nativeCollisionBefore,
+                        after:physicalSnapshot(this.nativeCollisionVehicle),
+                    }});
+                }} catch(_) {{}}
             }}
         }});
+        Interceptor.attach(processControlCollisionCheck, {{
+            onEnter() {{
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativeCollisionKey = vehicle.toString();
+                    this.nativeCollisionVehicle = vehicle;
+                    this.nativeCollisionBefore = physicalSnapshot(vehicle);
+                    this.nativeCollisionApplySpeed = this.context.esp.add(4).readU8();
+                }} catch(_) {{}}
+            }},
+            onLeave() {{
+                if (!this.nativeCollisionKey) return;
+                const control = controlStates.get(this.nativeCollisionKey);
+                if (!control) return;
+                try {{
+                    const vehicle = this.nativeCollisionVehicle;
+                    const after = physicalSnapshot(vehicle);
+                    control.collisionCheck = {{
+                        applySpeed:this.nativeCollisionApplySpeed,
+                        before:this.nativeCollisionBefore,
+                        after:after,
+                    }};
+                }} catch(_) {{}}
+            }}
+        }});
+        }}
         Interceptor.attach(processWheel, {{
             onEnter() {{
                 const vehicle = this.context.ecx;
@@ -195,7 +266,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     gasPedal:f(vehicle.add(0x49C)), brakePedal:f(vehicle.add(0x4A0)),
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
-                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity}} : null;}})(),
+                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck}} : null;}})(),
                     linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular
                 }};
                 wheelCalls++;
@@ -363,6 +434,11 @@ def main() -> int:
         action="store_true",
         help="run the automated playback with no ProcessWheel hook and report timer samples",
     )
+    parser.add_argument(
+        "--collision-diagnostics",
+        action="store_true",
+        help="also observe ProcessCollision and ProcessControlCollisionCheck in the Frida route",
+    )
     args = parser.parse_args()
     if args.cpp_hook and args.timing_only:
         parser.error("--cpp-hook and --timing-only are mutually exclusive")
@@ -412,6 +488,7 @@ def main() -> int:
         ),
         "cpp_binary": str(cpp_binary.resolve()) if args.cpp_hook else "",
         "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
+        "collision_diagnostics": bool(args.collision_diagnostics),
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
     meta_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -442,6 +519,7 @@ def main() -> int:
     native_script = _native_script(
         args.mta_bin.resolve(), args.label,
         install_wheel_hook=not (args.cpp_hook or args.timing_only),
+        collision_diagnostics=args.collision_diagnostics,
     )
     if args.orchestrator:
         if not args.orchestrator.exists():
@@ -460,6 +538,9 @@ def main() -> int:
             native_only = (
                 "const OUTPUT_LABEL = " + json.dumps(args.label) + ";\n"
                 "const INSTALL_NATIVE_WHEEL_HOOK = true;\n"
+                "const INSTALL_COLLISION_DIAGNOSTICS = "
+                + str(args.collision_diagnostics).lower()
+                + ";\n"
                 + native_script[native_script.index(marker):]
             )
             native_script = bootstrap_module.build_frida_script(args.label) + "\n" + native_only

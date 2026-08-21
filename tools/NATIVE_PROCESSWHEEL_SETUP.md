@@ -29,8 +29,10 @@
 The native hook filters `m_nModelIndex == 411` before recording, so map
 vehicles do not contaminate the Infernus stream.
 4. Prepare a local server resource that creates the model-411 vehicle and
-   starts the TAS playback. The validated local server disabled anti-cheats
-   `4,56` because the debug client was rejected by those checks.
+   starts the TAS playback. Set the local server `<fpslimit>` to `100` to
+   match the reference recording; the previous default `74` changes native
+   timer cadence. The validated local server also disabled anti-cheats `4,56`
+   because the debug client was rejected by those checks.
 
 The tool's `--prepare-registry` and `--use-real-vorbis` options temporarily
 point the 32-bit MTA registry location at the debug tree and replace the
@@ -53,7 +55,10 @@ route; convert its sibling `.cpp.bin` file with
 `infernus-physics/tools/convert_native_processwheel_cpp.py`. The default
 Frida route remains available for cross-checking. `--timing-only` runs the
 same automated playback without either ProcessWheel hook and reports timer
-samples, providing a no-hook timing control.
+samples, providing a no-hook timing control. The optional
+`--collision-diagnostics` flag adds read-only `ProcessCollision` and
+`ProcessControlCollisionCheck` snapshots to the Frida route; it is intended
+for collision classification, not the minimal timing capture.
 
 Example:
 
