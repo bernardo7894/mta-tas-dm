@@ -240,12 +240,16 @@ joining.
 
 For the missing transient GTA observable, `tools/native_processwheel_capture.py`
 uses the user's permissive `mtasa-blue` debug client and a pre-resume Frida
-hook on US 1.0 `CVehicle::ProcessWheel` (VA `0x6D6C00`, RVA `0x2D6C00`). The
-hook records direct entry arguments and clearly labeled private-state fields;
-it does not alter the function or call recorded positions. `contactSpeeds[4]`
+hook on US 1.0 `CVehicle::ProcessWheel` (VA `0x6D6C00`, RVA `0x2D6C00`). A
+lower-overhead alternative in the local Debug `multiplayer_sa_d.dll` wraps the
+four `ProcessCarWheelPair` call sites and calls the original function unchanged.
+Both routes record direct entry arguments and clearly labeled private-state
+fields; neither alters physics or calls recorded positions. `contactSpeeds[4]`
 are the `wheelContactSpeed` argument at ProcessWheel entry, after the preceding
-GTA suspension pass. The corresponding alignment/report tool is
-`infernus-physics/tools/align_native_processwheel.py`.
+GTA suspension pass. The C++ route emits a binary batch stream converted by
+`infernus-physics/tools/convert_native_processwheel_cpp.py`. The corresponding
+alignment/report tool is `infernus-physics/tools/align_native_processwheel.py`.
+A no-hook/C++ timing control matched at about `961.647` game-ms/s.
 
 The local debug build currently needs its matching private capture server and
 resource setup. The server harness disables anti-cheats `4,56` because the

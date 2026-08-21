@@ -46,7 +46,7 @@ def _js_string(value: str) -> str:
     return json.dumps(value.replace("\\", "/"))
 
 
-def _native_script(mta_bin: Path, output_label: str) -> str:
+def _native_script(mta_bin: Path, output_label: str, *, install_wheel_hook: bool = True) -> str:
     bin_dir = _js_string(str(mta_bin))
     mta_dir = _js_string(str(mta_bin / "MTA"))
     return f"""
@@ -54,6 +54,7 @@ def _native_script(mta_bin: Path, output_label: str) -> str:
 const BIN_DIR = {bin_dir};
 const MTA_DIR = {mta_dir};
 const OUTPUT_LABEL = {_js_string(output_label)};
+const INSTALL_NATIVE_WHEEL_HOOK = {str(install_wheel_hook).lower()};
 let bootstrapDone = false;
 
 Process.setExceptionHandler(function(details) {{
@@ -123,6 +124,7 @@ try {{
     }} }});
 }} catch(e) {{ send({{type:'native_bootstrap_error', message:String(e)}}); }}
 
+if (INSTALL_NATIVE_WHEEL_HOOK) {{
 (function installNativeWheelHook() {{
     const main = Process.mainModule;
     const processWheel = main.base.add({PROCESS_WHEEL_RVA});
@@ -196,6 +198,22 @@ try {{
     }} catch(e) {{ send({{type:'native_hook_error', message:String(e)}}); }}
     setInterval(flush,100); setInterval(() => send({{type:'native_counts', processCalls, wheelCalls, frame}}),3000);
 }})();
+}}
+"""
+
+
+def _timing_probe_script() -> str:
+    return """
+(function installNativeTimingProbe() {
+    const main = Process.mainModule;
+    const gameFrame = main.base.add(0x77CB4C);
+    const gameTimeMs = main.base.add(0x77CB84);
+    setInterval(function() {
+        try {
+            send({type:'native_timing', wallMs:Date.now(), gameFrame:gameFrame.readU32(), gameTimeMs:gameTimeMs.readU32()});
+        } catch (_) {}
+    }, 1000);
+})();
 """
 
 
@@ -316,9 +334,35 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--duration", type=float, default=240.0)
     parser.add_argument("--label", default="native-processwheel")
+    parser.add_argument(
+        "--cpp-hook",
+        action="store_true",
+        help=(
+            "use the optional local mtasa-blue C++ call-site hook instead of "
+            "Frida ProcessWheel interception; writes a sibling .cpp.bin stream"
+        ),
+    )
+    parser.add_argument(
+        "--timing-only",
+        action="store_true",
+        help="run the automated playback with no ProcessWheel hook and report timer samples",
+    )
     args = parser.parse_args()
+    if args.cpp_hook and args.timing_only:
+        parser.error("--cpp-hook and --timing-only are mutually exclusive")
     _kill_targets()
     mta_bin = args.mta_bin.resolve()
+    cpp_binary = args.output.with_suffix(args.output.suffix + ".cpp.bin")
+    timing_output = args.output.with_suffix(args.output.suffix + ".timing.jsonl")
+    if args.cpp_hook or args.timing_only:
+        timing_output.parent.mkdir(parents=True, exist_ok=True)
+        if timing_output.exists():
+            timing_output.unlink()
+    if args.cpp_hook:
+        cpp_binary.parent.mkdir(parents=True, exist_ok=True)
+        if cpp_binary.exists():
+            cpp_binary.unlink()
+        os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT"] = str(cpp_binary.resolve())
     os.environ["MTA_BIN"] = str(mta_bin)
     restore_registry = _prepare_registry(mta_bin) if args.prepare_registry else (lambda: None)
     restore_vorbis = _prepare_real_vorbis(mta_bin) if args.use_real_vorbis else (lambda: None)
@@ -343,6 +387,15 @@ def main() -> int:
         "process_wheel_va": hex(IMAGE_BASE + PROCESS_WHEEL_RVA),
         "process_wheel_rva": hex(PROCESS_WHEEL_RVA),
         "direct_observable": "CVehicle::ProcessWheel entry arguments and vehicle state",
+        "hook": (
+            "mtasa-blue C++ call-site wrapper"
+            if args.cpp_hook
+            else "none (timer probe)"
+            if args.timing_only
+            else "Frida entry hook"
+        ),
+        "cpp_binary": str(cpp_binary.resolve()) if args.cpp_hook else "",
+        "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
     meta_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -364,8 +417,16 @@ def main() -> int:
             print(f"[frida] {payload}")
         elif kind == "native_counts":
             print(f"[native] process={payload.get('processCalls')} wheel={payload.get('wheelCalls')} frame={payload.get('frame')}")
+        elif kind == "native_timing":
+            if args.cpp_hook or args.timing_only:
+                with timing_output.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
+            print(f"[timing] wallMs={payload.get('wallMs')} gameTimeMs={payload.get('gameTimeMs')} gameFrame={payload.get('gameFrame')}")
 
-    native_script = _native_script(args.mta_bin.resolve(), args.label)
+    native_script = _native_script(
+        args.mta_bin.resolve(), args.label,
+        install_wheel_hook=not (args.cpp_hook or args.timing_only),
+    )
     if args.orchestrator:
         if not args.orchestrator.exists():
             parser.error(f"orchestrator does not exist: {args.orchestrator}")
@@ -375,10 +436,13 @@ def main() -> int:
         bootstrap_module = importlib.util.module_from_spec(spec)
         sys.modules["mta_native_bootstrap"] = bootstrap_module
         spec.loader.exec_module(bootstrap_module)
-        marker = "(function installNativeWheelHook()"
-        native_only = "const OUTPUT_LABEL = " + json.dumps(args.label) + ";\n" + native_script[native_script.index(marker):]
-        native_script = bootstrap_module.build_frida_script(args.label) + "\n" + native_only
-
+        if args.cpp_hook or args.timing_only:
+            native_script = bootstrap_module.build_frida_script(args.label) + "\n"
+            native_script += _timing_probe_script()
+        else:
+            marker = "(function installNativeWheelHook()"
+            native_only = "const OUTPUT_LABEL = " + json.dumps(args.label) + ";\n" + native_script[native_script.index(marker):]
+            native_script = bootstrap_module.build_frida_script(args.label) + "\n" + native_only
     script = session.create_script(native_script)
     script.on("message", on_message)
     script.load()
@@ -408,6 +472,8 @@ def main() -> int:
             restore_vorbis()
         finally:
             restore_registry()
+            if args.cpp_hook:
+                os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT", None)
     print(f"native capture written to {args.output}")
     return 0
 

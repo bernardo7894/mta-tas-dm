@@ -38,6 +38,23 @@ point the 32-bit MTA registry location at the debug tree and replace the
 restored in the cleanup path. A local orchestrator script may be passed with
 `--orchestrator` to reuse its tested Frida survival/bootstrap hooks.
 
+## Lower-overhead C++ hook
+
+The local Debug `multiplayer_sa_d.dll` also contains an opt-in C++ wrapper at
+the four `ProcessCarWheelPair` call sites (`0x6A567B`, `0x6A56E9`, `0x6A5B49`,
+and `0x6A5BB7`). The source changes are in
+`Client/multiplayer_sa/native_processwheel_capture.{h,cpp}`, the
+`CMultiplayerSA.cpp` include/init call, and the corresponding `Multiplayer SA`
+project/filter entries. Build `Multiplayer SA.vcxproj` as `Debug|Win32`. The
+wrapper calls the original `0x6D6C00` function unchanged and writes a fixed
+binary batch stream only when the environment variable
+`MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT` is set. Use `--cpp-hook` to select this
+route; convert its sibling `.cpp.bin` file with
+`infernus-physics/tools/convert_native_processwheel_cpp.py`. The default
+Frida route remains available for cross-checking. `--timing-only` runs the
+same automated playback without either ProcessWheel hook and reports timer
+samples, providing a no-hook timing control.
+
 Example:
 
 ```powershell
@@ -49,4 +66,13 @@ python tools/native_processwheel_capture.py `
   --orchestrator "C:\Users\berna\mtasa_deobfuscation\mta_bytecode_orchestrator.py" `
   --prepare-registry --use-real-vorbis `
   --output "..\infernus-physics\generated\native-processwheel.jsonl"
+```
+
+For the lower-overhead build, add `--cpp-hook`; after playback, convert the
+sibling binary stream:
+
+```powershell
+python ..\infernus-physics\tools\convert_native_processwheel_cpp.py `
+  "..\infernus-physics\generated\native-processwheel.jsonl.cpp.bin" `
+  "..\infernus-physics\generated\native-processwheel-cpp.jsonl"
 ```
