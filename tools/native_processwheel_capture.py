@@ -132,6 +132,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const gameFrameCounter = main.base.add(0x77CB4C);
     const gameTimeMs = main.base.add(0x77CB84);
     let frame = 0, processCalls = 0, wheelCalls = 0, batch = [];
+    const controlStates = new Map();
     const f = p => {{ try {{ return p.readFloat(); }} catch(_) {{ return null; }} }};
     const u8 = p => {{ try {{ return p.readU8(); }} catch(_) {{ return null; }} }};
     const s32 = p => {{ try {{ return p.readS32(); }} catch(_) {{ return null; }} }};
@@ -145,10 +146,24 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
             throw new Error('ProcessWheel signature mismatch at '+processWheel+'; refusing hardcoded hook');
     function flush() {{ if (batch.length) {{ send({{type:'native_batch', label:OUTPUT_LABEL, records:batch}}); batch=[]; }} }}
     try {{
-        Interceptor.attach(processControl, {{ onEnter() {{
-            const vehicle = this.context.ecx;
-            try {{ if (vehicle.add(0x22).readU16() === 411) {{ frame++; processCalls++; }} }} catch(_) {{}}
-        }} }});
+        Interceptor.attach(processControl, {{
+            onEnter() {{
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() === 411) {{
+                        frame++; processCalls++;
+                        const key = vehicle.toString();
+                        controlStates.set(key, {{
+                            gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
+                            gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
+                            linearVelocity:vec(vehicle.add(0x44)),
+                            angularVelocity:vec(vehicle.add(0x50)),
+                        }});
+                        this.nativeControlKey = key;
+                    }}
+                }} catch(_) {{}}
+            }}
+        }});
         Interceptor.attach(processWheel, {{
             onEnter() {{
                 const vehicle = this.context.ecx;
@@ -180,6 +195,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     gasPedal:f(vehicle.add(0x49C)), brakePedal:f(vehicle.add(0x4A0)),
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
+                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity}} : null;}})(),
                     linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular
                 }};
                 wheelCalls++;
@@ -440,8 +456,12 @@ def main() -> int:
             native_script = bootstrap_module.build_frida_script(args.label) + "\n"
             native_script += _timing_probe_script()
         else:
-            marker = "(function installNativeWheelHook()"
-            native_only = "const OUTPUT_LABEL = " + json.dumps(args.label) + ";\n" + native_script[native_script.index(marker):]
+            marker = "if (INSTALL_NATIVE_WHEEL_HOOK) {"
+            native_only = (
+                "const OUTPUT_LABEL = " + json.dumps(args.label) + ";\n"
+                "const INSTALL_NATIVE_WHEEL_HOOK = true;\n"
+                + native_script[native_script.index(marker):]
+            )
             native_script = bootstrap_module.build_frida_script(args.label) + "\n" + native_only
     script = session.create_script(native_script)
     script.on("message", on_message)

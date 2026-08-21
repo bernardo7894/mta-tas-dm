@@ -252,9 +252,10 @@ alignment/report tool is `infernus-physics/tools/align_native_processwheel.py`.
 A no-hook/C++ timing control matched at about `961.647` game-ms/s.
 
 The local debug build currently needs its matching private capture server and
-resource setup. The server harness disables anti-cheats `4,56` because the
-instrumented debug client is otherwise rejected; this setting is not part of
-ordinary MTA recordings. Keep native rows separate from Lua `vehicleTelemetry`
+resource setup. The server harness uses `<fpslimit>100</fpslimit>` to match the
+reference recording's 100 Hz cadence, and disables anti-cheats `4,56` because
+the instrumented debug client is otherwise rejected; neither setting is part
+of ordinary MTA recordings. Keep native rows separate from Lua `vehicleTelemetry`
 fields and preserve their provenance when merging diagnostic artifacts.
 
 Also inspect the actual Git diff before committing. This upstream file historically uses CRLF line endings; avoid creating enormous diffs consisting only of line-ending normalization.
