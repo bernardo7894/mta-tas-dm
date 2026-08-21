@@ -138,6 +138,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
     const processControl = main.base.add({PROCESS_CONTROL_RVA});
     const processControlCollisionCheck = main.base.add(0x2A29C0);
     const processCollision = main.base.add(0x14DFB0);
+    const checkCollision = main.base.add(0x14D920);
     const gameFrameCounter = main.base.add(0x77CB4C);
     const gameTimeMs = main.base.add(0x77CB84);
     let frame = 0, processCalls = 0, wheelCalls = 0, batch = [];
@@ -159,6 +160,15 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
         damageImpulse:f(vehicle.add(0xD8)),
         collidedEntity:(()=>{{try{{return vehicle.add(0xDC).readPointer().toString()}}catch(_){{return null}}}})(),
     }});
+    const snapshotChanged = (before, after) => {{
+        if (!before || !after) return false;
+        const lv = delta(after.linearVelocity, before.linearVelocity) || [];
+        const av = delta(after.angularVelocity, before.angularVelocity) || [];
+        return Math.sqrt(lv.reduce((s,v) => s + v*v, 0)) > 1e-7
+            || Math.sqrt(av.reduce((s,v) => s + v*v, 0)) > 1e-7
+            || after.damageImpulse !== before.damageImpulse
+            || after.collidedEntity !== before.collidedEntity;
+    }};
     const expectedWheelEntry = [0x83,0xec,0x48,0xd9,0x05];
     for (let i=0; i<expectedWheelEntry.length; i++)
         if (processWheel.add(i).readU8() !== expectedWheelEntry[i])
@@ -179,6 +189,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             angularVelocity:vec(vehicle.add(0x50)),
                             vtable:(()=>{{try{{return vehicle.readPointer().toString()}}catch(_){{return null}}}})(),
                             vtableCollisionCheck:(()=>{{try{{return vehicle.readPointer().add(0x5C).readPointer().toString()}}catch(_){{return null}}}})(),
+                            vehicleFlagsByte3:u8(vehicle.add(0x42B)),
+                            audioChangingGear:((u8(vehicle.add(0x42B)) || 0) & 0x20) !== 0,
                             collisionProcess:pendingCollisions.get(key) || null,
                         }});
                         pendingCollisions.delete(key);
@@ -201,10 +213,34 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
             onLeave() {{
                 if (!this.nativeCollisionKey) return;
                 try {{
-                    pendingCollisions.set(this.nativeCollisionKey, {{
+                    const after = physicalSnapshot(this.nativeCollisionVehicle);
+                    if (snapshotChanged(this.nativeCollisionBefore, after))
+                        pendingCollisions.set(this.nativeCollisionKey, {{
+                            before:this.nativeCollisionBefore,
+                            after:after,
+                        }});
+                }} catch(_) {{}}
+            }}
+        }});
+        Interceptor.attach(checkCollision, {{
+            onEnter() {{
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativeCollisionKey = vehicle.toString();
+                    this.nativeCollisionVehicle = vehicle;
+                    this.nativeCollisionBefore = physicalSnapshot(vehicle);
+                }} catch(_) {{}}
+            }},
+            onLeave(returnValue) {{
+                if (!this.nativeCollisionKey) return;
+                try {{
+                    const control = controlStates.get(this.nativeCollisionKey);
+                    if (control) control.collisionCheckInner = {{
                         before:this.nativeCollisionBefore,
                         after:physicalSnapshot(this.nativeCollisionVehicle),
-                    }});
+                        result:returnValue.toInt32(),
+                    }};
                 }} catch(_) {{}}
             }}
         }});
@@ -266,7 +302,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     gasPedal:f(vehicle.add(0x49C)), brakePedal:f(vehicle.add(0x4A0)),
                     contactWheels:u8(vehicle.add(0x960)), driveWheels:u8(vehicle.add(0x961)),
                     mass:f(vehicle.add(0x8C)), turnMass:f(vehicle.add(0x90)), centerOfMass:vec(vehicle.add(0xA4)),
-                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck}} : null;}})(),
+                    controlEntry:(()=>{{const c=controlStates.get(vehicle.toString());return c ? {{gameFrame:c.gameFrame,gameTimeMs:c.gameTimeMs,linearVelocity:c.linearVelocity,angularVelocity:c.angularVelocity,vtable:c.vtable,vtableCollisionCheck:c.vtableCollisionCheck,vehicleFlagsByte3:c.vehicleFlagsByte3,audioChangingGear:c.audioChangingGear,collisionProcess:c.collisionProcess,collisionCheck:c.collisionCheck,collisionCheckInner:c.collisionCheckInner}} : null;}})(),
                     linearVelocityBefore:beforeLinear, angularVelocityBefore:beforeAngular
                 }};
                 wheelCalls++;
