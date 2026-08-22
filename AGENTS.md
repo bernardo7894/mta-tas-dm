@@ -295,7 +295,13 @@ restores the file. `--playback-output-name` selects a unique output name and
 `--reference-map-resource` actual-race mode, the harness starts `race` and the
 real map only after the server reports the client `JOIN`; `--duration` is the
 post-JOIN retention budget, so a slow loader cannot consume the complete TAS
-playback window before the map exists. Keep native rows separate from Lua
+playback window before the map exists. For a normal local Debug client launch,
+`--launcher-exe "...\\Multi Theft Auto_d.exe"` starts the real launcher and
+attaches the observer to its new `gta_sa.exe` child only after server `JOIN`,
+which avoids perturbing the launcher's L3 startup. The C++ ProcessWheel hook
+is already active in inherited `multiplayer_sa_d.dll` before that late attach.
+The server `JOIN` event is watched both on stdout and the server log because
+redirected Debug-server stdout is not consistently flushed. Keep native rows separate from Lua
 `vehicleTelemetry` fields and preserve their provenance when merging diagnostic
 artifacts. A `*** NETWORK TROUBLE ***` overlay invalidates a
 capture: `CNetAPI::DoPulse` raises it after a recent puresync enqueue and 10

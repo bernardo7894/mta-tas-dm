@@ -48,7 +48,13 @@ GTA `WINMM.dll` import to the local `mtasa.dll` loader proxy, and replace the
 binary changes are restored in the cleanup path. Direct-Frida mode should
 leave the GTA import as `WINMM.dll` and uses the self-contained Frida
 bootstrap; loader mode uses `--prepare-gta-import` and disables that Frida
-bootstrap so the loader and Frida never initialize core twice. An interrupted
+bootstrap so the loader and Frida never initialize core twice. For the stable
+local-client route, pass `--launcher-exe "...\\Multi Theft Auto_d.exe"` instead:
+the normal launcher creates GTA, the harness waits for server `JOIN`, then
+attaches only to the new GTA child. The C++ hook has already initialized in
+`multiplayer_sa_d.dll`, so late Frida attachment does not lose native rows and
+does not perturb L3 startup. The server `JOIN` watcher checks both redirected
+stdout and `server/mods/deathmatch/logs/server.log`. An interrupted
 run is recovered by the next launch's process-kill and side-by-side restore
 checks. Without `--prepare-gta-import`, direct spawning of an unpatched
 executable can show “MTA: Unable to find winmm.dll import entry” only when a
