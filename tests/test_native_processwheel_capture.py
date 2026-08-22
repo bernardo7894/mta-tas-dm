@@ -46,6 +46,12 @@ def test_one_tick_resource_prep_handles_crlf_and_delay(tmp_path):
     assert (resource / "client.lua").read_bytes().decode() == client
 
 
+def test_actual_race_duration_guard_preserves_full_playback():
+    source = TOOL.read_text(encoding="utf-8")
+    assert "17781.0 / 99.0" in source
+    assert "requires --duration" in source
+
+
 def test_loader_mode_disables_mixed_frida_bootstrap():
     tool = _load_tool()
     script = tool._native_script(Path("C:/mta"), "loader", skip_frida_bootstrap=True)

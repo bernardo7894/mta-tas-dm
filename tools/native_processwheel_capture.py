@@ -1533,6 +1533,17 @@ def main() -> int:
         parser.error("--reference-map-resource must be a single server resource name")
     if args.playback_start_delay_ms < 0:
         parser.error("--playback-start-delay-ms must be non-negative")
+    if args.reference_map_resource:
+        # etnies-native.tas contains 17,781 frames at 99 FPS.  Include client
+        # startup/map setup and the requested warm-up; never silently kill a
+        # real playback halfway through just because the caller copied a short
+        # synthetic-capture duration.
+        minimum_duration = 60.0 + (17781.0 / 99.0) + 15.0 + args.playback_start_delay_ms / 1000.0
+        if args.duration < minimum_duration:
+            parser.error(
+                f"--reference-map-resource requires --duration >= {minimum_duration:.1f}s "
+                "to retain the complete TAS playback"
+            )
     if args.suspension_stage_only and (not args.collision_diagnostics or args.cpp_hook or args.timing_only):
         parser.error("--suspension-stage-only requires Frida --collision-diagnostics")
     server_commands_after: list[tuple[float, str]] = []

@@ -149,6 +149,22 @@ python tools/native_processwheel_capture.py `
   --output "..\infernus-physics\generated\native-processwheel.jsonl"
 ```
 
+For a real Etnies run, use a duration that retains the complete 17,781-frame
+playback; the harness rejects a shorter duration in actual-race mode:
+
+```powershell
+python tools/native_processwheel_capture.py `
+  --gta-exe "D:\Users\Bernardo\Documents\mtasa-blue\Bin\gta_sa.exe" `
+  --mta-bin "D:\Users\Bernardo\Documents\mtasa-blue\Bin" `
+  --server-exe "D:\Users\Bernardo\Documents\mtasa-blue\Bin\server\MTA Server_d.exe" `
+  --reference-map-resource "race-dm-Skynetv5-EtniesII(fix)" `
+  --reference-record-name etnies-native `
+  --prepare-registry --prepare-gta-import --prepare-tas-folder `
+  --playback-start-delay-ms 30000 --duration 300 `
+  --cpp-hook --playback-output-name actual-race `
+  --output "..\infernus-physics\generated\actual-race.jsonl"
+```
+
 For the lower-overhead build, add `--cpp-hook`; after playback, convert the
 sibling binary stream. Combining `--cpp-hook --collision-diagnostics` also
 writes a `.collision.bin` stream from the two verified `ApplyCollisionAlt`
