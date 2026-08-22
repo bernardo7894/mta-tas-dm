@@ -267,7 +267,11 @@ can warm the native timer before source playback, and `--capture-from-first-gas`
 buffers Frida rows until the first nonzero pedal; both values are recorded in
 metadata. `--suspension-stage-only` is a Frida-only reduced collision mode
 that installs only the entity-collision and ProcessSuspension stage hooks;
-its metadata must retain `suspension_stage_only=true`. The timing probe emits
+its metadata must retain `suspension_stage_only=true`. In the local Debug
+build, the stage observer reads exact TAS source tags through the non-mutating
+`GetNativeProcessWheelSourceTagBridge` export; this replaces a render-clock
+join but remains diagnostic because the observer can still perturb cadence and
+stale tags after playback failure must be rejected. The timing probe emits
 `timerOldStep`, `timerStepNonClipped`, and `timerStep` alongside game time.
 `--one-tick-config` is a separate
 state-input diagnostic that writes one public state/control sample and captures

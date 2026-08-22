@@ -143,6 +143,9 @@ def test_suspension_stage_only_omits_wheel_hook_but_keeps_stage_hooks():
     )
     assert "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS)" in script
     assert "source:'gta-native-process-stage'" in script
+    assert "GetNativeProcessWheelSourceTagBridge" in script
+    assert "sourceFrameTagEntry" in script
+    assert "sourceFrameTagExit" in script
     assert "if (INSTALL_NATIVE_WHEEL_HOOK)" in script
     assert script.index("source:'gta-native-process-stage'") < script.index("if (INSTALL_NATIVE_WHEEL_HOOK) {")
 

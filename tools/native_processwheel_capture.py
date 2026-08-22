@@ -230,6 +230,23 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
     const vec = p => {{ try {{ return [p.readFloat(),p.add(4).readFloat(),p.add(8).readFloat()]; }} catch(_) {{ return null; }} }};
     const array4 = p => [0,1,2,3].map(i => f(p.add(i * 4)));
     const u32Array4 = p => [0,1,2,3].map(i => {{ try {{ return p.add(i * 4).readU32(); }} catch(_) {{ return null; }} }});
+    let nativeSourceTagGetter = null;
+    const readNativeSourceTag = () => {{
+        try {{
+            if (!nativeSourceTagGetter) {{
+                const multiplayer = Process.findModuleByName('multiplayer_sa_d.dll');
+                const address = multiplayer && multiplayer.findExportByName('GetNativeProcessWheelSourceTagBridge');
+                if (!address) return {{frame:null, tick:null}};
+                nativeSourceTagGetter = new NativeFunction(address, 'void', ['pointer', 'pointer']);
+            }}
+            const frame = Memory.alloc(4), tick = Memory.alloc(4);
+            nativeSourceTagGetter(frame, tick);
+            return {{frame:frame.readS32(), tick:tick.readS32()}};
+        }} catch (_) {{
+            nativeSourceTagGetter = null;
+            return {{frame:null, tick:null}};
+        }}
+    }};
     const dot = (a,b) => a && b ? a[0]*b[0]+a[1]*b[1]+a[2]*b[2] : null;
     const delta = (a,b) => a && b ? a.map((v,i) => v-b[i]) : null;
     const suspensionSnapshot = vehicle => ({{
@@ -405,9 +422,12 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                         }}
                         frame++; processCalls++;
                         const key = vehicle.toString();
+                        const sourceTagEntry = readNativeSourceTag();
                         controlStates.set(key, {{
                             gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
                             gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
+                            sourceFrameTagEntry:sourceTagEntry.frame,
+                            sourceTickMsTagEntry:sourceTagEntry.tick,
                             timerOldStep:f(timerOldStep),
                             timerStepNonClipped:f(timerStepNonClipped),
                             timerStep:f(timerStep),
@@ -453,6 +473,9 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                     const control = controlStates.get(key);
                     if (!control) return;
                     const exit = physicalSnapshot(this.nativeControlVehicle || this.context.ecx);
+                    const sourceTagExit = readNativeSourceTag();
+                    control.sourceFrameTagExit = sourceTagExit.frame;
+                    control.sourceTickMsTagExit = sourceTagExit.tick;
                     control.controlExit = exit;
                     for (const record of control.activeRows || []) record.controlExit = exit;
                     if (SUSPENSION_STAGE_ONLY && captureActive) {{
@@ -460,6 +483,10 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                         batch.push({{
                             source:'gta-native-process-stage', label:OUTPUT_LABEL,
                             processOrdinal:frame,
+                            sourceFrameTagEntry:control.sourceFrameTagEntry,
+                            sourceTickMsTagEntry:control.sourceTickMsTagEntry,
+                            sourceFrameTagExit:control.sourceFrameTagExit,
+                            sourceTickMsTagExit:control.sourceTickMsTagExit,
                             gameFrame:control.gameFrame, gameTimeMs:control.gameTimeMs,
                             vehicle:key,
                             timerOldStep:control.timerOldStep,
