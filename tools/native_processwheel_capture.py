@@ -1437,7 +1437,13 @@ def main() -> int:
         help="temporarily replace mtasa-blue's vorbisfile loader proxy with vorbisfile_real.dll",
     )
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--duration", type=float, default=240.0)
+    parser.add_argument(
+        "--duration", type=float, default=240.0,
+        help=(
+            "capture duration in seconds; for --reference-map-resource this is "
+            "the retention budget after the client JOIN"
+        ),
+    )
     parser.add_argument("--label", default="native-processwheel")
     parser.add_argument(
         "--cpp-hook",
@@ -1776,6 +1782,11 @@ def main() -> int:
             if args.reference_map_resource
             else "not_applicable"
         ),
+        "duration_semantics": (
+            "post_join_retention_budget"
+            if args.reference_map_resource
+            else "wall_clock_from_capture_start"
+        ),
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
     meta_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -1868,7 +1879,25 @@ def main() -> int:
             raise last_error
 
     try:
-        time.sleep(max(0.0, args.duration))
+        if args.reference_map_resource and server_joined is not None:
+            # In actual-race mode, startup can be delayed by the local loader
+            # and the client must not lose the entire playback budget while it
+            # is still joining.  ``--duration`` is therefore the post-join
+            # retention budget; an absent JOIN still fails explicitly after a
+            # bounded startup wait instead of silently producing a short run.
+            startup_timeout = max(60.0, float(args.duration))
+            deadline = time.monotonic() + startup_timeout
+            while not server_joined.wait(0.25):
+                if time.monotonic() >= deadline:
+                    print(
+                        "[capture] actual-race client did not join before the "
+                        f"{startup_timeout:.1f}s startup timeout; rejecting capture"
+                    )
+                    break
+            else:
+                time.sleep(max(0.0, args.duration))
+        else:
+            time.sleep(max(0.0, args.duration))
     finally:
         reference_race_cancel.set()
         for timer in server_command_timers:

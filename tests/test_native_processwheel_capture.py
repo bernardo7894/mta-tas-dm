@@ -80,6 +80,8 @@ def test_actual_race_map_start_waits_for_client_join():
     assert "start_reference_race_after_join" in source
     assert "after_server_join_start_race_then_map" in source
     assert '(25.0, "start race")' not in source
+    assert 'post_join_retention_budget' in source
+    assert 'actual-race client did not join' in source
 
 
 def test_loader_mode_disables_mixed_frida_bootstrap():
