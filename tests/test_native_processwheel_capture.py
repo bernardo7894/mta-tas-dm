@@ -68,6 +68,21 @@ def test_one_tick_resource_prep_accepts_current_source_tag_trigger(tmp_path):
     assert (resource / "server.lua").read_text(encoding="utf-8") == server
 
 
+def test_playback_pre_render_prep_is_reversible(tmp_path):
+    tool = _load_tool()
+    resource = (
+        tmp_path / "server" / "mods" / "deathmatch" / "resources" / "tas"
+    )
+    resource.mkdir(parents=True)
+    client = resource / "client.lua"
+    original = b"playbackPreRender = false\n"
+    client.write_bytes(original)
+    restore = tool._prepare_playback_pre_render(tmp_path)
+    assert client.read_bytes() == b"playbackPreRender = true\n"
+    restore()
+    assert client.read_bytes() == original
+
+
 def test_actual_race_duration_guard_preserves_full_playback():
     source = TOOL.read_text(encoding="utf-8")
     assert "17781.0 / 99.0" in source

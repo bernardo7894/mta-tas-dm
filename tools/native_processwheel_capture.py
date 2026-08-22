@@ -1189,6 +1189,26 @@ def _prepare_controls_only_playback(mta_bin: Path) -> Any:
     return restore
 
 
+def _prepare_playback_pre_render(mta_bin: Path) -> Any:
+    """Temporarily schedule TAS playback from onClientPreRender."""
+    client = (
+        mta_bin / "server" / "mods" / "deathmatch" / "resources"
+        / "tas" / "client.lua"
+    )
+    if not client.exists():
+        return lambda: None
+    original = client.read_bytes()
+    marker = b"playbackPreRender = false"
+    if original.count(marker) != 1:
+        return lambda: None
+    client.write_bytes(original.replace(marker, b"playbackPreRender = true", 1))
+
+    def restore() -> None:
+        client.write_bytes(original)
+
+    return restore
+
+
 def _prepare_public_tas_folder(mta_bin: Path) -> Any:
     """Temporarily make the local TAS resource use its public saves folder."""
     client = mta_bin / "server" / "mods" / "deathmatch" / "resources" / "tas" / "client.lua"
@@ -1680,6 +1700,11 @@ def main() -> int:
         help="temporarily disable recorded pose/velocity playback and apply only recorded controls",
     )
     parser.add_argument(
+        "--playback-pre-render",
+        action="store_true",
+        help="temporarily schedule TAS playback from onClientPreRender instead of onClientRender",
+    )
+    parser.add_argument(
         "--one-tick-config",
         type=Path,
         help=(
@@ -2051,6 +2076,10 @@ def main() -> int:
         _prepare_controls_only_playback(mta_bin)
         if args.controls_only_playback else (lambda: None)
     )
+    restore_playback_pre_render = (
+        _prepare_playback_pre_render(mta_bin)
+        if args.playback_pre_render else (lambda: None)
+    )
     restore_one_tick = (
         _prepare_one_tick_resource(mta_bin, one_tick_config)
         if one_tick_config is not None else (lambda: None)
@@ -2270,6 +2299,7 @@ def main() -> int:
         "cpp_stage_only": bool(args.cpp_stage_only),
         "prepare_tas_folder": bool(args.prepare_tas_folder),
         "controls_only_playback": bool(args.controls_only_playback),
+        "playback_pre_render": bool(args.playback_pre_render),
         "pose_only_playback": bool(args.pose_only_playback),
         "pose_linear_only_playback": bool(args.pose_linear_only_playback),
         "playback_output_name": playback_output_name if (args.tas_automation_playback or args.reference_map_resource) else args.playback_output_name or "",
@@ -2459,6 +2489,7 @@ def main() -> int:
             restore_with_retry(restore_tas_folder)
             restore_with_retry(restore_pose_linear_only)
             restore_with_retry(restore_pose_only)
+            restore_with_retry(restore_playback_pre_render)
             restore_with_retry(restore_controls_only)
             restore_with_retry(restore_one_tick)
             restore_with_retry(restore_capture_output)
