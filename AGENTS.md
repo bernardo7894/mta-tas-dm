@@ -207,7 +207,11 @@ The `tas` resource exposes two narrowly scoped, protected server exports:
 HTTP interface. The server selects the map and waits for the target race
 vehicle; a normal server-to-client event then makes the client load its
 private `.tas` file and run `/recordplayback`. No GUI focus, keyboard input, or
-server-console interaction is part of this workflow.
+server-console interaction is part of this workflow. If controls-only playback
+ends with the legacy `vehicle missing` message, the TAS resource also emits a
+single diagnostic snapshot into the physics export as
+`playbackFailureDiagnostic`; it distinguishes a dead player from a destroyed
+or non-controller vehicle element and is mechanism evidence only.
 
 The HTTP credential is an ordinary MTA server account, not a separate account
 system. Its ACL group must allow `general.http` and `resource.tas`; keep the
