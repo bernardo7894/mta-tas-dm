@@ -122,9 +122,9 @@ def test_one_tick_stable_timer_filter_and_state_hold_are_supported():
 
 def test_controls_only_playback_preserves_live_kinematic_extension():
     source = (TOOL.parents[1] / "new" / "tas" / "client.lua").read_text(encoding="utf-8")
-    assert "frame_data.x.livePosition = p" in source
-    assert "frame_data.x.liveVelocity = v" in source
-    assert "frame_data.x.liveAngularVelocity = rv" in source
+    assert "frame_data.x.livePosition = live_p" in source
+    assert "frame_data.x.liveVelocity = live_v" in source
+    assert "frame_data.x.liveAngularVelocity = live_rv" in source
     assert "liveVelocity = extra.liveVelocity" in source
     assert "liveAngularVelocity = extra.liveAngularVelocity" in source
     assert "serialized TAS p/v/rv fields" in source
