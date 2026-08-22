@@ -169,6 +169,14 @@ def test_cpp_processcontrol_boundary_source_window_is_explicit_diagnostic():
     assert 'cpp_processcontrol_source_window' in source
 
 
+def test_cpp_processsuspension_boundary_is_explicit_diagnostic():
+    source = TOOL.read_text(encoding="utf-8")
+    assert "--cpp-processsuspension-boundary" in source
+    assert "MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT" in source
+    assert "cpp_suspension_binary" in source
+    assert "cpp_processsuspension_boundary" in source
+
+
 def test_actual_race_capture_removes_synthetic_map_and_polls_race_vehicle(tmp_path):
     tool = _load_tool()
     resource = (

@@ -315,7 +315,13 @@ cadence and later vehicle/resource addresses must be treated as contamination.
 The server `JOIN` event is watched both on stdout and the server log because
 redirected Debug-server stdout is not consistently flushed. Keep native rows separate from Lua
 `vehicleTelemetry` fields and preserve their provenance when merging diagnostic
-artifacts. A `*** NETWORK TROUBLE ***` overlay invalidates a
+artifacts. The Debug C++ route also supports
+`--cpp-processsuspension-boundary`, which hooks the US 1.0
+`CAutomobile::ProcessSuspension` entry (`0x6AFB10`) through a copied-prologue
+trampoline and writes a fixed `.suspension.bin` stream; convert and audit it
+with the matching `infernus-physics` tools. This is a timing-filtered
+boundary diagnostic, never hidden-state injection or continuous trajectory
+evidence. A `*** NETWORK TROUBLE ***` overlay invalidates a
 capture: `CNetAPI::DoPulse` raises it after a recent puresync enqueue and 10
 seconds without processed return-sync, then freezes controls and vehicle
 move/turn state. It is client recovery behavior, not a physics result; apply

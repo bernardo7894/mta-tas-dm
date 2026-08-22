@@ -183,14 +183,32 @@ python tools/native_processwheel_capture.py `
 ```
 
 For the lower-overhead build, add `--cpp-hook`; after playback, convert the
-sibling binary stream. `--cpp-processcontrol-boundary` additionally writes a
+sibling binary stream. To obtain the direct launch-boundary diagnostic with
+the lower-overhead wheel route, add
+`--cpp-minimal --cpp-processsuspension-boundary`. The `.suspension.bin`
+sibling is converted and audited separately from the wheel stream. `--cpp-processcontrol-boundary` additionally writes a
 `.control.bin` stream of direct `CAutomobile::ProcessControl` entry/exit
 state; limit it with `--cpp-processcontrol-source-window START END` when
 investigating a bounded source window. Convert it with
 `infernus-physics/tools/convert_native_processcontrol_cpp.py` and audit it
 with `infernus-physics/tools/audit_native_processcontrol_boundary.py`. This
 stream is diagnostic only: its observer can perturb render/source cadence,
-so it must not be used as continuous trajectory evidence. Combining
+so it must not be used as continuous trajectory evidence.
+
+`--cpp-processsuspension-boundary` additionally writes a `.suspension.bin`
+stream from a direct entry trampoline at `CAutomobile::ProcessSuspension`
+(`0x6AFB10`). The trampoline copies the verified original prologue and calls
+that original body unchanged; it records before/after private compression,
+previous compression, wheel counts, collision points/normals, wheel states,
+pedals, latch byte, source tags, and the three native timer values. Convert it
+with `infernus-physics/tools/convert_native_processsuspension_cpp.py` and audit
+it with `infernus-physics/tools/audit_native_processsuspension_boundary.py`.
+The stream is a timing-filtered forensic boundary diagnostic, not hidden-state
+injection or continuous trajectory evidence. A valid target window does not
+waive the complete real-resource controls-only requirement; map-restart
+vehicle addresses and rejected timer rows remain contamination.
+
+Combining
 `--cpp-hook --collision-diagnostics` also writes a `.collision.bin` stream from the two verified `ApplyCollisionAlt`
 call sites (`0x54C9FA`, `0x54CAC2`). The harness automatically enables the
 diagnostic `MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY=1` mode so a final partial

@@ -1594,6 +1594,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--cpp-processsuspension-boundary",
+        action="store_true",
+        help=(
+            "capture direct CAutomobile::ProcessSuspension entry/exit state "
+            "with the C++ trampoline hook; diagnostic only"
+        ),
+    )
+    parser.add_argument(
         "--timing-only",
         action="store_true",
         help="run the automated playback with no ProcessWheel hook and report timer samples",
@@ -1659,6 +1667,8 @@ def main() -> int:
         parser.error("--cpp-static-skid-diagnostics requires --cpp-hook")
     if args.cpp_processcontrol_boundary and not args.cpp_hook:
         parser.error("--cpp-processcontrol-boundary requires --cpp-hook")
+    if args.cpp_processsuspension_boundary and not args.cpp_hook:
+        parser.error("--cpp-processsuspension-boundary requires --cpp-hook")
     if args.cpp_processcontrol_source_window and not args.cpp_processcontrol_boundary:
         parser.error("--cpp-processcontrol-source-window requires --cpp-processcontrol-boundary")
     if args.cpp_processcontrol_source_window:
@@ -1716,6 +1726,7 @@ def main() -> int:
     mta_bin = args.mta_bin.resolve()
     cpp_binary = args.output.with_suffix(args.output.suffix + ".cpp.bin")
     cpp_control_binary = args.output.with_suffix(args.output.suffix + ".control.bin")
+    cpp_suspension_binary = args.output.with_suffix(args.output.suffix + ".suspension.bin")
     cpp_collision_binary = args.output.with_suffix(args.output.suffix + ".collision.bin")
     timing_output = args.output.with_suffix(args.output.suffix + ".timing.jsonl")
     previous_collision_flush_every = os.environ.get(
@@ -1729,6 +1740,9 @@ def main() -> int:
     )
     previous_processcontrol_end = os.environ.get(
         "MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME"
+    )
+    previous_processsuspension_output = os.environ.get(
+        "MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT"
     )
     previous_mta_bin = os.environ.get("MTA_BIN")
     previous_capture_diagnostics = os.environ.get("MTA_NATIVE_CAPTURE_DIAGNOSTICS")
@@ -1762,6 +1776,13 @@ def main() -> int:
                 os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME"] = str(
                     args.cpp_processcontrol_source_window[1]
                 )
+        if args.cpp_processsuspension_boundary:
+            cpp_suspension_binary.parent.mkdir(parents=True, exist_ok=True)
+            if cpp_suspension_binary.exists():
+                cpp_suspension_binary.unlink()
+            os.environ["MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT"] = str(
+                cpp_suspension_binary.resolve()
+            )
         if args.collision_diagnostics:
             if cpp_collision_binary.exists():
                 cpp_collision_binary.unlink()
@@ -1970,7 +1991,12 @@ def main() -> int:
             str(cpp_control_binary.resolve())
             if args.cpp_processcontrol_boundary else ""
         ),
+        "cpp_suspension_binary": (
+            str(cpp_suspension_binary.resolve())
+            if args.cpp_processsuspension_boundary else ""
+        ),
         "cpp_processcontrol_boundary": bool(args.cpp_processcontrol_boundary),
+        "cpp_processsuspension_boundary": bool(args.cpp_processsuspension_boundary),
         "cpp_processcontrol_source_window": (
             list(args.cpp_processcontrol_source_window)
             if args.cpp_processcontrol_source_window else None
@@ -2203,12 +2229,15 @@ def main() -> int:
                 os.environ.pop("MTA_NATIVE_PROCESSCONTROL_CPP_OUTPUT", None)
                 os.environ.pop("MTA_NATIVE_PROCESSCONTROL_CPP_START_FRAME", None)
                 os.environ.pop("MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME", None)
+                os.environ.pop("MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT", None)
                 if previous_processcontrol_output is not None:
                     os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_OUTPUT"] = previous_processcontrol_output
                 if previous_processcontrol_start is not None:
                     os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_START_FRAME"] = previous_processcontrol_start
                 if previous_processcontrol_end is not None:
                     os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME"] = previous_processcontrol_end
+                if previous_processsuspension_output is not None:
+                    os.environ["MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT"] = previous_processsuspension_output
                 os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_OUTPUT", None)
                 if previous_collision_flush_every is None:
                     os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY", None)
