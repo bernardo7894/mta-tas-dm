@@ -137,7 +137,12 @@ with `--native-internal-config` for a same-hidden-state local comparison. The
 optional config field `oneTickDelayMs` delays the public state event so a
 one-tick experiment can be run after client startup has warmed; this is
 required when measuring a stable `0.5` timestep rather than launch-time
-stalls. `nativeInternal.wheelStates` uses native order `FL,RL,FR,RR` and is
+stalls. For a state-input target whose first post-teleport tick is irregular,
+`oneTickWarmHoldMs` reapplies the public target state for a bounded diagnostic
+window and `nativeInternal.requireStableTimerStep=true` makes the Frida hidden-
+state write wait until `timerStep` is explicitly inside `.45..55`; audit the
+target selection separately from surrounding rejected timer samples.
+`nativeInternal.wheelStates` uses native order `FL,RL,FR,RR` and is
 written at the source-backed `CAutomobile::m_WheelStates` offset `0x968`.
 Compare its `controlEntry`/`controlExit` rows with the simulator's pre-step
 diagnostic; it is state-input evidence, not a continuous trajectory benchmark.
