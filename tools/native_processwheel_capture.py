@@ -1000,7 +1000,7 @@ def _prepare_native_capture_output(mta_bin: Path, output_name: str) -> Any:
 
 
 def _prepare_actual_race_capture(
-    mta_bin: Path, record_name: str, output_name: str
+    mta_bin: Path, record_name: str, output_name: str, delay_ms: int = 0
 ) -> Any:
     """Turn ``native_capture`` into a race-vehicle playback trigger.
 
@@ -1054,8 +1054,12 @@ local function poll(player)
     if not tasResource or getResourceState(tasResource) ~= "running" then return end
     sent[player] = true
     stopPoll(player)
-    triggerClientEvent(player, "tas:automationStart", getResourceRootElement(tasResource),
-        1, {record_literal}, {output_literal})
+    setTimer(function()
+        if isElement(player) then
+            triggerClientEvent(player, "tas:automationStart", getResourceRootElement(tasResource),
+                1, {record_literal}, {output_literal})
+        end
+    end, {int(delay_ms)}, 1)
 end
 
 local function arm(player)
@@ -1586,7 +1590,8 @@ def main() -> int:
     restore_tas_folder = _prepare_public_tas_folder(mta_bin) if args.prepare_tas_folder else (lambda: None)
     restore_actual_race = (
         _prepare_actual_race_capture(
-            mta_bin, args.reference_record_name, playback_output_name
+            mta_bin, args.reference_record_name, playback_output_name,
+            args.playback_start_delay_ms
         )
         if args.reference_map_resource else (lambda: None)
     )
@@ -1802,6 +1807,19 @@ def main() -> int:
     script.on("message", on_message)
     script.load()
     device.resume(pid)
+
+    def restore_with_retry(action: Any) -> None:
+        last_error: OSError | None = None
+        for _ in range(40):
+            try:
+                action()
+                return
+            except PermissionError as exc:
+                last_error = exc
+                time.sleep(0.25)
+        if last_error is not None:
+            raise last_error
+
     try:
         time.sleep(max(0.0, args.duration))
     finally:
@@ -1817,6 +1835,16 @@ def main() -> int:
             session.detach()
         except Exception:
             pass
+        # Frida's kill/detach can return before Windows closes the image
+        # mappings.  Wait before restoring executable/DLL bytes.
+        try:
+            process = psutil.Process(int(pid))
+            for _ in range(80):
+                if not process.is_running():
+                    break
+                time.sleep(0.25)
+        except (psutil.Error, TypeError, ValueError):
+            time.sleep(1.0)
         if server is not None and server.poll() is None:
             try:
                 if server.stdin is not None:
@@ -1826,19 +1854,19 @@ def main() -> int:
             except Exception:
                 server.kill()
         try:
-            restore_vorbis()
+            restore_with_retry(restore_vorbis)
         finally:
-            restore_actual_race()
-            restore_tas_folder()
-            restore_pose_linear_only()
-            restore_pose_only()
-            restore_controls_only()
-            restore_one_tick()
-            restore_capture_output()
-            restore_tas_automation()
-            restore_capture_start_delay()
-            restore_gta_import()
-            restore_registry()
+            restore_with_retry(restore_actual_race)
+            restore_with_retry(restore_tas_folder)
+            restore_with_retry(restore_pose_linear_only)
+            restore_with_retry(restore_pose_only)
+            restore_with_retry(restore_controls_only)
+            restore_with_retry(restore_one_tick)
+            restore_with_retry(restore_capture_output)
+            restore_with_retry(restore_tas_automation)
+            restore_with_retry(restore_capture_start_delay)
+            restore_with_retry(restore_gta_import)
+            restore_with_retry(restore_registry)
             if args.cpp_hook:
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT", None)
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_MINIMAL", None)

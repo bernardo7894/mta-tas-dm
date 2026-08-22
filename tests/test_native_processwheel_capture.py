@@ -103,7 +103,9 @@ def test_actual_race_capture_removes_synthetic_map_and_polls_race_vehicle(tmp_pa
     (resource / "meta.xml").write_bytes(original_meta)
     (resource / "server.lua").write_bytes(original_server)
 
-    restore = tool._prepare_actual_race_capture(tmp_path, "etnies-native", "race-tags")
+    restore = tool._prepare_actual_race_capture(
+        tmp_path, "etnies-native", "race-tags", delay_ms=30000
+    )
     meta = (resource / "meta.xml").read_bytes().decode()
     server = (resource / "server.lua").read_bytes().decode()
     assert "Etnies.map" not in meta
@@ -111,6 +113,7 @@ def test_actual_race_capture_removes_synthetic_map_and_polls_race_vehicle(tmp_pa
     assert 'getPedOccupiedVehicle(player)' in server
     assert 'getElementModel(vehicle) ~= 411' in server
     assert '"race-tags"' in server
+    assert "end, 30000, 1)" in server
     assert '"tas:automationStart"' in server
     assert "\r\n" in server
 
