@@ -284,6 +284,14 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
             }};
         }} catch(_) {{ return null; }}
     }};
+    const matrixSnapshot = vehicle => {{
+        try {{
+            const q = vehicle.add(0x14).readPointer();
+            return [vec(q), vec(q.add(0x10)), vec(q.add(0x20)), vec(q.add(0x30))];
+        }} catch (_) {{
+            return null;
+        }}
+    }};
     const physicalSnapshot = vehicle => ({{
         linearVelocity:vec(vehicle.add(0x44)),
         angularVelocity:vec(vehicle.add(0x50)),
@@ -452,6 +460,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                             gasPedalBefore:f(vehicle.add(0x49C)),
                             brakePedalBefore:f(vehicle.add(0x4A0)),
                             suspensionAtProcessControlEntry:INSTALL_COLLISION_DIAGNOSTICS ? suspensionSnapshot(vehicle) : null,
+                            matrix:SUSPENSION_STAGE_ONLY ? matrixSnapshot(vehicle) : null,
                             suspensionProcess:null,
                             frictionProcess:null,
                             frictionForceEvents:[],
@@ -473,6 +482,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                     const control = controlStates.get(key);
                     if (!control) return;
                     const exit = physicalSnapshot(this.nativeControlVehicle || this.context.ecx);
+                    if (SUSPENSION_STAGE_ONLY)
+                        exit.matrix = matrixSnapshot(this.nativeControlVehicle || this.context.ecx);
                     const sourceTagExit = readNativeSourceTag();
                     control.sourceFrameTagExit = sourceTagExit.frame;
                     control.sourceTickMsTagExit = sourceTagExit.tick;
@@ -502,9 +513,11 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                                 gasPedalAfter:f(stageVehicle.add(0x49C)),
                                 brakePedalAfter:f(stageVehicle.add(0x4A0)),
                                 suspensionAtProcessControlEntry:control.suspensionAtProcessControlEntry,
+                                matrix:control.matrix,
                             }},
                             controlExit:exit,
                             entityCollisionProcess:control.entityCollisionProcess,
+                            collisionCheck:control.collisionCheck,
                             suspensionProcess:control.suspensionProcess,
                         }});
                         if (batch.length >= 4) flush();
@@ -803,6 +816,37 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
             }}
         }});
         }}
+        }}
+        // Reduced stage mode keeps only this narrow read-only boundary probe
+        // in addition to ProcessEntityCollision/ProcessSuspension.  It shows
+        // whether GTA advances the incoming motion before the wheel stack.
+        if (SUSPENSION_STAGE_ONLY) {{
+        Interceptor.attach(processControlCollisionCheck, {{
+            onEnter() {{
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativeStageCollisionKey = vehicle.toString();
+                    this.nativeStageCollisionVehicle = vehicle;
+                    this.nativeStageCollisionBefore = physicalSnapshot(vehicle);
+                    this.nativeStageCollisionApplySpeed = this.context.esp.add(4).readU8();
+                }} catch (_) {{}}
+            }},
+            onLeave(returnValue) {{
+                const key = this.nativeStageCollisionKey;
+                if (!key) return;
+                try {{
+                    const control = controlStates.get(key);
+                    if (control) control.collisionCheck = {{
+                        applySpeed:this.nativeStageCollisionApplySpeed,
+                        before:this.nativeStageCollisionBefore,
+                        after:physicalSnapshot(this.nativeStageCollisionVehicle),
+                        result:returnValue.toInt32(),
+                    }};
+                }} catch (_) {{}}
+                this.nativeStageCollisionKey = null;
+            }}
+        }});
         }}
         if (INSTALL_NATIVE_WHEEL_HOOK) {{
         Interceptor.attach(processWheel, {{
@@ -1670,6 +1714,16 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--cpp-processsuspension-source-window",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        help=(
+            "limit the C++ ProcessSuspension boundary stream to inclusive source "
+            "frame tags; requires --cpp-processsuspension-boundary"
+        ),
+    )
+    parser.add_argument(
         "--timing-only",
         action="store_true",
         help="run the automated playback with no ProcessWheel hook and report timer samples",
@@ -1749,6 +1803,12 @@ def main() -> int:
         start_frame, end_frame = args.cpp_processcontrol_source_window
         if start_frame < 1 or end_frame < start_frame:
             parser.error("invalid C++ ProcessControl source window")
+    if args.cpp_processsuspension_source_window and not args.cpp_processsuspension_boundary:
+        parser.error("--cpp-processsuspension-source-window requires --cpp-processsuspension-boundary")
+    if args.cpp_processsuspension_source_window:
+        start_frame, end_frame = args.cpp_processsuspension_source_window
+        if start_frame < 1 or end_frame < start_frame:
+            parser.error("invalid C++ ProcessSuspension source window")
     if args.launcher_exe and args.prepare_gta_import:
         parser.error("--launcher-exe uses the normal launcher and cannot use --prepare-gta-import")
     if args.playback_output_name and not args.playback_output_name.replace("-", "").replace("_", "").isalnum():
@@ -1820,6 +1880,12 @@ def main() -> int:
     previous_processsuspension_output = os.environ.get(
         "MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT"
     )
+    previous_processsuspension_start = os.environ.get(
+        "MTA_NATIVE_PROCESSSUSPENSION_CPP_START_FRAME"
+    )
+    previous_processsuspension_end = os.environ.get(
+        "MTA_NATIVE_PROCESSSUSPENSION_CPP_END_FRAME"
+    )
     previous_mta_bin = os.environ.get("MTA_BIN")
     previous_capture_diagnostics = os.environ.get("MTA_NATIVE_CAPTURE_DIAGNOSTICS")
     os.environ["MTA_NATIVE_CAPTURE_DIAGNOSTICS"] = "1"
@@ -1862,6 +1928,20 @@ def main() -> int:
             os.environ["MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT"] = str(
                 cpp_suspension_binary.resolve()
             )
+            suspension_window = args.cpp_processsuspension_source_window
+            if suspension_window is None and args.cpp_stage_only:
+                # Stage-only captures are normally bounded together: the
+                # ProcessControl matrix boundary and direct suspension state
+                # must cover the same source tags without paying full-run hook
+                # overhead.  An explicit suspension window still wins.
+                suspension_window = args.cpp_processcontrol_source_window
+            if suspension_window is not None:
+                os.environ["MTA_NATIVE_PROCESSSUSPENSION_CPP_START_FRAME"] = str(
+                    suspension_window[0]
+                )
+                os.environ["MTA_NATIVE_PROCESSSUSPENSION_CPP_END_FRAME"] = str(
+                    suspension_window[1]
+                )
         if args.collision_diagnostics:
             if cpp_collision_binary.exists():
                 cpp_collision_binary.unlink()
@@ -2056,7 +2136,8 @@ def main() -> int:
         "capture_level": "collision-stage" if args.suspension_stage_only else "wheel",
         "install_wheel_hook": not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
         "direct_observable": (
-            "CAutomobile ProcessEntityCollision/ProcessSuspension stage snapshots"
+            "CAutomobile ProcessControlCollisionCheck/ProcessEntityCollision/ProcessSuspension "
+            "stage snapshots and ProcessControl matrices"
             if args.suspension_stage_only
             else "CVehicle::ProcessWheel entry arguments and vehicle state"
         ),
@@ -2086,6 +2167,13 @@ def main() -> int:
         "cpp_processcontrol_source_window": (
             list(args.cpp_processcontrol_source_window)
             if args.cpp_processcontrol_source_window else None
+        ),
+        "cpp_processsuspension_source_window": (
+            list(args.cpp_processsuspension_source_window)
+            if args.cpp_processsuspension_source_window
+            else list(args.cpp_processcontrol_source_window)
+            if args.cpp_stage_only and args.cpp_processcontrol_source_window
+            else None
         ),
         "cpp_collision_binary": (
             str(cpp_collision_binary.resolve())
@@ -2319,6 +2407,8 @@ def main() -> int:
                 os.environ.pop("MTA_NATIVE_PROCESSCONTROL_CPP_START_FRAME", None)
                 os.environ.pop("MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME", None)
                 os.environ.pop("MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT", None)
+                os.environ.pop("MTA_NATIVE_PROCESSSUSPENSION_CPP_START_FRAME", None)
+                os.environ.pop("MTA_NATIVE_PROCESSSUSPENSION_CPP_END_FRAME", None)
                 if previous_processcontrol_output is not None:
                     os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_OUTPUT"] = previous_processcontrol_output
                 if previous_processcontrol_start is not None:
@@ -2327,6 +2417,10 @@ def main() -> int:
                     os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME"] = previous_processcontrol_end
                 if previous_processsuspension_output is not None:
                     os.environ["MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT"] = previous_processsuspension_output
+                if previous_processsuspension_start is not None:
+                    os.environ["MTA_NATIVE_PROCESSSUSPENSION_CPP_START_FRAME"] = previous_processsuspension_start
+                if previous_processsuspension_end is not None:
+                    os.environ["MTA_NATIVE_PROCESSSUSPENSION_CPP_END_FRAME"] = previous_processsuspension_end
                 os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_OUTPUT", None)
                 if previous_collision_flush_every is None:
                     os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY", None)

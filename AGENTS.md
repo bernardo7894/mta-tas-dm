@@ -313,9 +313,17 @@ boundary observers.
 `--cpp-processcontrol-boundary` enables the matching direct
 `CAutomobile::ProcessControl` entry/exit stream (`.control.bin`), and
 `--cpp-processcontrol-source-window START END` limits it to a source-tagged
-window. `--cpp-stage-only` enables the ProcessControl and ProcessSuspension
-boundary streams without installing ProcessWheel; it is a lower-overhead
-causal diagnostic, still subject to the strict timer-step gate. Convert it with
+window. For a bounded `--cpp-stage-only` run, the same window also limits the
+ProcessSuspension stream by default; use
+`--cpp-processsuspension-source-window START END` to override it. The bounded
+stage route captures ProcessControl matrices as well as direct suspension
+state, and a target window can pass the strict timer-step policy without
+paying full-run boundary-observer overhead. It remains diagnostic: the latest
+accepted window reached source tags 25--88 only, so it is not complete
+controls-only trajectory evidence. `--cpp-stage-only` enables the ProcessControl
+and ProcessSuspension boundary streams without installing ProcessWheel; it is
+a lower-overhead causal diagnostic, still subject to the strict timer-step gate.
+Convert it with
 `infernus-physics/tools/convert_native_processcontrol_cpp.py` and audit it
 with `infernus-physics/tools/audit_native_processcontrol_boundary.py`. This
 observer is diagnostic only because its extra reads can perturb render/source
@@ -327,7 +335,10 @@ artifacts. The Debug C++ route also supports
 `--cpp-processsuspension-boundary`, which hooks the US 1.0
 `CAutomobile::ProcessSuspension` entry (`0x6AFB10`) through a copied-prologue
 trampoline and writes a fixed `.suspension.bin` stream; convert and audit it
-with the matching `infernus-physics` tools. This is a timing-filtered
+with the matching `infernus-physics` tools. The ProcessControl boundary row
+also copies the vehicle matrix after the bounded-window matrix read was fixed;
+zero matrices in older C++ stage artifacts are stale instrumentation, not
+vehicle orientation. This is a timing-filtered
 boundary diagnostic, never hidden-state injection or continuous trajectory
 evidence. A `*** NETWORK TROUBLE ***` overlay invalidates a
 capture: `CNetAPI::DoPulse` raises it after a recent puresync enqueue and 10

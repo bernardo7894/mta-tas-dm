@@ -200,9 +200,26 @@ def test_cpp_processcontrol_boundary_source_window_is_explicit_diagnostic():
 def test_cpp_processsuspension_boundary_is_explicit_diagnostic():
     source = TOOL.read_text(encoding="utf-8")
     assert "--cpp-processsuspension-boundary" in source
+    assert "--cpp-processsuspension-source-window" in source
     assert "MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT" in source
+    assert "MTA_NATIVE_PROCESSSUSPENSION_CPP_START_FRAME" in source
     assert "cpp_suspension_binary" in source
     assert "cpp_processsuspension_boundary" in source
+
+
+def test_reduced_stage_probe_keeps_collision_check_and_matrix_boundaries():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "stage",
+        install_wheel_hook=False,
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+    )
+    assert "const matrixSnapshot" in script
+    assert "matrix:control.matrix" in script
+    assert "collisionCheck:control.collisionCheck" in script
+    assert "nativeStageCollisionKey" in script
 
 
 def test_actual_race_capture_removes_synthetic_map_and_polls_race_vehicle(tmp_path):
