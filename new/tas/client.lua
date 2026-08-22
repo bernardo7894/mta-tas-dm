@@ -2709,13 +2709,6 @@ function tas.render_playback(deltaTime)
 		local frame_data = tas.data[tas.var.play_frame]
 		local frame_data_next = tas.data[tas.var.play_frame+1] or frame_data
 
-		-- Diagnostic only: tag native ProcessWheel rows with the TAS source
-		-- frame/control tick currently being applied.  This does not alter
-		-- playback state or physics and is absent on production MTA clients.
-		if setNativeProcessWheelSourceTag then
-			setNativeProcessWheelSourceTag(tas.var.play_frame, frame_data.tick)
-		end
-		
 		if not tas.settings.useOnlyBinds then
 		
 			local x = tas.lerp(frame_data.p[1], frame_data_next.p[1], inbetweening)
@@ -2796,6 +2789,15 @@ function tas.render_playback(deltaTime)
 			if tas.settings.useNitroStates then
 				tas.nos(vehicle, frame_data.n)
 			end
+		end
+
+		-- Diagnostic only: tag native ProcessWheel rows after all controls,
+		-- analog steering, and nitro state for this source frame have been
+		-- written. The next native physics tick therefore observes the same
+		-- control frame as this provenance tag. This changes no playback state
+		-- or physics and is absent on production MTA clients.
+		if setNativeProcessWheelSourceTag then
+			setNativeProcessWheelSourceTag(tas.var.play_frame, frame_data.tick)
 		end
 
 		if tas.var.playback_recording then

@@ -120,6 +120,16 @@ def test_one_tick_stable_timer_filter_and_state_hold_are_supported():
     assert "native_timer_step" in source or "timerStep" in source
 
 
+def test_source_tag_is_written_after_controls_are_applied():
+    source = (TOOL.parents[1] / "new" / "tas" / "client.lua").read_text(encoding="utf-8")
+    tag = source.index("setNativeProcessWheelSourceTag(tas.var.play_frame, frame_data.tick)")
+    controls = source.index("tas.resetBinds()", tag - 6000)
+    nitro = source.index("tas.nos(vehicle, frame_data.n)", controls)
+    capture = source.index("tas.capture_playback_frame(vehicle, frame_data, deltaTime)", tag)
+    assert controls < nitro < tag < capture
+    assert "after all controls" in source[tag - 400:tag]
+
+
 def test_collision_diagnostics_capture_fresh_automobile_col_points():
     source = TOOL.read_text(encoding="utf-8")
     assert "main.base.add(0x81BFF8)" in source

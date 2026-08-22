@@ -87,10 +87,12 @@ route; convert its sibling `.cpp.bin` file with
 accepts the current 354-byte rows, the source-tagged 366-byte rows, and the
 earlier 294/326-byte row formats. In the local Debug build, the TAS client
 optionally calls `setNativeProcessWheelSourceTag(play_frame, frame_tick)` from
-its playback render callback. The C++ capture bridge exports that tag into
-each 366-byte row as `sourceFrameTag`/`sourceTickMsTag`; production MTA clients
-have no such function and remain unchanged. This is a diagnostic source-frame
-label, not a pose/control injection or a continuous-trajectory correction.
+its playback render callback after writing that frame's digital/analog controls
+and nitro state. The next native physics tick therefore observes the controls
+named by the tag. The C++ capture bridge exports it into each 366-byte row as
+`sourceFrameTag`/`sourceTickMsTag`; production MTA clients have no such function
+and remain unchanged. This is a diagnostic source-frame label, not a
+pose/control injection or a continuous-trajectory correction.
 Start both `tas` and `native_capture` explicitly when using this bridge.
 The default Frida route remains available for cross-checking. `--timing-only` runs the
 same automated playback without either ProcessWheel hook and reports timer
