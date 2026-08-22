@@ -112,6 +112,14 @@ def test_one_tick_wheel_state_offset_is_after_gas_audio_field():
     assert "u32Array4(vehicle.add(0x968))" in source
 
 
+def test_one_tick_stable_timer_filter_and_state_hold_are_supported():
+    source = TOOL.read_text(encoding="utf-8")
+    assert "requireStableTimerStep" in source
+    assert "oneTickWarmHoldMs" in source
+    assert "one_tick_config is not None" in source
+    assert "native_timer_step" in source or "timerStep" in source
+
+
 def test_collision_diagnostics_capture_fresh_automobile_col_points():
     source = TOOL.read_text(encoding="utf-8")
     assert "main.base.add(0x81BFF8)" in source

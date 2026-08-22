@@ -319,6 +319,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                 try {{
                     if (vehicle.add(0x22).readU16() === 411) {{
                         if (!oneTickInjected && ONE_TICK_CONFIG.nativeInternal && ONE_TICK_CONFIG.position) {{
+                            const internal = ONE_TICK_CONFIG.nativeInternal;
                             const target = ONE_TICK_CONFIG.position;
                             const velocityTarget = ONE_TICK_CONFIG.velocity;
                             const angularTarget = ONE_TICK_CONFIG.angularVelocity;
@@ -334,8 +335,13 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             const angularDistance = currentAngular && angularTarget
                                 ? Math.sqrt((currentAngular[0] - angularTarget[0]) ** 2 + (currentAngular[1] - angularTarget[1]) ** 2 + (currentAngular[2] - angularTarget[2]) ** 2)
                                 : 0;
-                            if (distance < 0.01 && velocityDistance < 0.02 && angularDistance < 0.02) {{ 
-                                const internal = ONE_TICK_CONFIG.nativeInternal;
+                            const requireStableTimerStep = internal.requireStableTimerStep === true;
+                            const stableTimerStep = f(timerStep);
+                            if (distance < 0.01 && velocityDistance < 0.02 && angularDistance < 0.02
+                                && (!requireStableTimerStep
+                                    || (stableTimerStep !== null
+                                        && stableTimerStep >= 0.45
+                                        && stableTimerStep <= 0.55))) {{
                                 const writeArray = (offset, values) => {{
                                     if (!Array.isArray(values)) return;
                                     for (let i = 0; i < Math.min(4, values.length); i++)
@@ -1283,16 +1289,21 @@ def _prepare_one_tick_resource(mta_bin: Path, config: dict[str, Any]) -> Any:
     client += r'''
 
 local oneTickPending = nil
+local oneTickActive = nil
+local oneTickHoldUntil = 0
 local function applyOneTickState()
     local vehicle = getPedOccupiedVehicle(localPlayer)
     if not vehicle then return end
-    local config = oneTickPending
+    if oneTickActive == nil and type(oneTickPending) == "table" then
+        oneTickActive = oneTickPending
+        oneTickPending = nil
+        oneTickHoldUntil = getTickCount() + math.max(0, tonumber(oneTickActive.oneTickWarmHoldMs) or 0)
+    end
+    local config = oneTickActive
     if type(config) ~= "table" then
         removeEventHandler("onClientPreRender", root, applyOneTickState)
         return
     end
-    oneTickPending = nil
-    removeEventHandler("onClientPreRender", root, applyOneTickState)
     local function vec(value)
         return type(value) == "table" and value[1] and value[2] and value[3]
     end
@@ -1323,6 +1334,10 @@ local function applyOneTickState()
         setVehicleNitroCount(vehicle, tonumber(config.nitro.count) or 100)
         setVehicleNitroLevel(vehicle, tonumber(config.nitro.level) or 1)
         setVehicleNitroActivated(vehicle, config.nitro.active == true)
+    end
+    if getTickCount() >= oneTickHoldUntil then
+        oneTickActive = nil
+        removeEventHandler("onClientPreRender", root, applyOneTickState)
     end
 end
 addEvent("nativeCapture:oneTick", true)
@@ -1682,7 +1697,7 @@ def main() -> int:
     previous_mta_bin = os.environ.get("MTA_BIN")
     previous_capture_diagnostics = os.environ.get("MTA_NATIVE_CAPTURE_DIAGNOSTICS")
     os.environ["MTA_NATIVE_CAPTURE_DIAGNOSTICS"] = "1"
-    if args.cpp_hook or args.timing_only:
+    if args.cpp_hook or args.timing_only or one_tick_config is not None:
         timing_output.parent.mkdir(parents=True, exist_ok=True)
         if timing_output.exists():
             timing_output.unlink()
@@ -1906,7 +1921,8 @@ def main() -> int:
             if args.cpp_hook and args.collision_diagnostics else ""
         ),
         "cpp_collision_flush_every": bool(args.cpp_hook and args.collision_diagnostics),
-        "timing_samples": str(timing_output.resolve()) if args.cpp_hook or args.timing_only else "",
+        "timing_samples": str(timing_output.resolve())
+        if args.cpp_hook or args.timing_only or one_tick_config is not None else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
         "suspension_stage_only": bool(args.suspension_stage_only),
         "static_skid_diagnostics": bool(args.static_skid_diagnostics or args.cpp_static_skid_diagnostics),
@@ -1966,7 +1982,7 @@ def main() -> int:
         elif kind == "native_counts":
             print(f"[native] process={payload.get('processCalls')} wheel={payload.get('wheelCalls')} frame={payload.get('frame')}")
         elif kind == "native_timing":
-            if args.cpp_hook or args.timing_only:
+            if args.cpp_hook or args.timing_only or one_tick_config is not None:
                 with timing_output.open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
             print(f"[timing] wallMs={payload.get('wallMs')} gameTimeMs={payload.get('gameTimeMs')} gameFrame={payload.get('gameFrame')}")
@@ -2012,7 +2028,7 @@ def main() -> int:
             + native_script[native_script.index(marker):]
         )
         native_script = bootstrap_module.build_frida_script(args.label) + "\n" + native_only
-    elif args.cpp_hook or args.timing_only:
+    elif args.cpp_hook or args.timing_only or one_tick_config is not None:
         # The optional orchestrator's larger bootstrap payload is useful for
         # the Frida wheel route, but it can stall the client before the TAS
         # resource starts when combined with the lower-overhead C++ hook.  The
