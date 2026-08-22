@@ -195,7 +195,7 @@ try {{
 }} catch(e) {{ send({{type:'native_bootstrap_error', message:String(e)}}); }}
 }}
 
-if (INSTALL_NATIVE_WHEEL_HOOK) {{
+if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
 (function installNativeWheelHook() {{
     const main = Process.mainModule;
     const processWheel = main.base.add({PROCESS_WHEEL_RVA});
@@ -429,6 +429,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                             handling:handlingSnapshot(vehicle),
                             collisionProcess:pendingCollisions.get(key) || null,
                             entityCollisionProcess:null,
+                            gasPedalBefore:f(vehicle.add(0x49C)),
+                            brakePedalBefore:f(vehicle.add(0x4A0)),
                             suspensionAtProcessControlEntry:INSTALL_COLLISION_DIAGNOSTICS ? suspensionSnapshot(vehicle) : null,
                             suspensionProcess:null,
                             frictionProcess:null,
@@ -453,6 +455,33 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                     const exit = physicalSnapshot(this.nativeControlVehicle || this.context.ecx);
                     control.controlExit = exit;
                     for (const record of control.activeRows || []) record.controlExit = exit;
+                    if (SUSPENSION_STAGE_ONLY && captureActive) {{
+                        const stageVehicle = this.nativeControlVehicle || this.context.ecx;
+                        batch.push({{
+                            source:'gta-native-process-stage', label:OUTPUT_LABEL,
+                            processOrdinal:frame,
+                            gameFrame:control.gameFrame, gameTimeMs:control.gameTimeMs,
+                            vehicle:key,
+                            timerOldStep:control.timerOldStep,
+                            timerStepNonClipped:control.timerStepNonClipped,
+                            timerStep:control.timerStep,
+                            controlEntry:{{
+                                linearVelocity:control.linearVelocity,
+                                angularVelocity:control.angularVelocity,
+                                rawSteerAngle:control.rawSteerAngle,
+                                steerAngle:control.steerAngle,
+                                gasPedalBefore:control.gasPedalBefore,
+                                brakePedalBefore:control.brakePedalBefore,
+                                gasPedalAfter:f(stageVehicle.add(0x49C)),
+                                brakePedalAfter:f(stageVehicle.add(0x4A0)),
+                                suspensionAtProcessControlEntry:control.suspensionAtProcessControlEntry,
+                            }},
+                            controlExit:exit,
+                            entityCollisionProcess:control.entityCollisionProcess,
+                            suspensionProcess:control.suspensionProcess,
+                        }});
+                        if (batch.length >= 4) flush();
+                    }}
                 }} catch(_) {{}}
             }},
         }});
@@ -483,8 +512,10 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                         entity:this.nativeEntityCollisionEntity ? this.nativeEntityCollisionEntity.toString() : null,
                         before:this.nativeEntityCollisionBefore,
                         after:suspensionSnapshot(this.nativeEntityCollisionVehicle),
-                        automobileCollisionPoints:colPointArray(automobileCollisionPoints, 12),
-                        outputCollisionPoints:colPointArray(this.nativeEntityCollisionOutput, 32),
+                        automobileCollisionPoints:SUSPENSION_STAGE_ONLY
+                            ? null : colPointArray(automobileCollisionPoints, 12),
+                        outputCollisionPoints:SUSPENSION_STAGE_ONLY
+                            ? null : colPointArray(this.nativeEntityCollisionOutput, 32),
                     }};
                 }} catch(_) {{}}
             }}
@@ -746,6 +777,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
         }});
         }}
         }}
+        if (INSTALL_NATIVE_WHEEL_HOOK) {{
         Interceptor.attach(processWheel, {{
             onEnter() {{
                 const vehicle = this.context.ecx;
@@ -815,6 +847,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK) {{
                 if (batch.length >= 32) flush();
             }}
         }});
+        }}
     }} catch(e) {{ send({{type:'native_hook_error', message:String(e)}}); }}
     setInterval(flush,100); setInterval(() => send({{type:'native_counts', processCalls, wheelCalls, frame}}),3000);
 }})();
@@ -1974,7 +2007,13 @@ def main() -> int:
         "actual_race_capture": bool(args.reference_map_resource),
         "process_wheel_va": hex(IMAGE_BASE + PROCESS_WHEEL_RVA),
         "process_wheel_rva": hex(PROCESS_WHEEL_RVA),
-        "direct_observable": "CVehicle::ProcessWheel entry arguments and vehicle state",
+        "capture_level": "collision-stage" if args.suspension_stage_only else "wheel",
+        "install_wheel_hook": not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
+        "direct_observable": (
+            "CAutomobile ProcessEntityCollision/ProcessSuspension stage snapshots"
+            if args.suspension_stage_only
+            else "CVehicle::ProcessWheel entry arguments and vehicle state"
+        ),
         "hook": (
             "mtasa-blue C++ minimal call-site wrapper"
             if args.cpp_minimal
@@ -2079,7 +2118,7 @@ def main() -> int:
 
     native_script = _native_script(
         args.mta_bin.resolve(), args.label,
-        install_wheel_hook=not (args.cpp_hook or args.timing_only),
+        install_wheel_hook=not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
         collision_diagnostics=args.collision_diagnostics,
         suspension_stage_only=args.suspension_stage_only,
         static_skid_diagnostics=args.static_skid_diagnostics,
@@ -2096,10 +2135,11 @@ def main() -> int:
         bootstrap_module = importlib.util.module_from_spec(spec)
         sys.modules["mta_native_bootstrap"] = bootstrap_module
         spec.loader.exec_module(bootstrap_module)
-        marker = "if (INSTALL_NATIVE_WHEEL_HOOK) {"
+        marker = "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {"
         native_only = (
             "const OUTPUT_LABEL = " + json.dumps(args.label) + ";\n"
-            "const INSTALL_NATIVE_WHEEL_HOOK = true;\n"
+            "const INSTALL_NATIVE_WHEEL_HOOK = "
+            + str(not args.suspension_stage_only).lower() + ";\n"
             "const INSTALL_COLLISION_DIAGNOSTICS = "
             + str(args.collision_diagnostics).lower()
             + ";\n"

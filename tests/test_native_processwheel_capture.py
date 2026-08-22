@@ -132,11 +132,27 @@ def test_source_tag_is_written_after_controls_are_applied():
     assert "after all controls" in source[tag - 400:tag]
 
 
+def test_suspension_stage_only_omits_wheel_hook_but_keeps_stage_hooks():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "stage",
+        install_wheel_hook=False,
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+    )
+    assert "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS)" in script
+    assert "source:'gta-native-process-stage'" in script
+    assert "if (INSTALL_NATIVE_WHEEL_HOOK)" in script
+    assert script.index("source:'gta-native-process-stage'") < script.index("if (INSTALL_NATIVE_WHEEL_HOOK) {")
+
+
 def test_collision_diagnostics_capture_fresh_automobile_col_points():
     source = TOOL.read_text(encoding="utf-8")
     assert "main.base.add(0x81BFF8)" in source
-    assert "automobileCollisionPoints:colPointArray(automobileCollisionPoints, 12)" in source
-    assert "outputCollisionPoints:colPointArray(this.nativeEntityCollisionOutput, 32)" in source
+    assert "colPointArray(automobileCollisionPoints, 12)" in source
+    assert "colPointArray(this.nativeEntityCollisionOutput, 32)" in source
+    assert "SUSPENSION_STAGE_ONLY" in source
     assert "automobileCollisionPointsAfter:colPointArray(automobileCollisionPoints, 12)" in source
     assert "CAPTURE_FROM_FIRST_GAS" in source
     assert "SUSPENSION_STAGE_ONLY" in source
