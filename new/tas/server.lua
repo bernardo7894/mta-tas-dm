@@ -311,6 +311,19 @@ addEventHandler("tas:automationStatus", root, function(id, state, message)
 	end
 end)
 
+-- A playback failure can mean that the player left an otherwise live vehicle,
+-- rather than that the vehicle element was destroyed. The client sends this
+-- one-shot scalar snapshot before reporting automation cancellation. Validate
+-- both event source and client so this remains diagnostic, not a public log
+-- injection surface.
+addEvent("tas:playbackFailureDiagnostic", true)
+addEventHandler("tas:playbackFailureDiagnostic", root, function(context)
+	local active = tas.var.automation
+	if client ~= source or not active or active.player ~= client or type(context) ~= "table" then return end
+	local encoded = toJSON(context, true) or "{}"
+	outputServerLog("[SERVER-TAS] playback failure #"..tostring(active.id).." diagnostic: "..encoded)
+end)
+
 -- // Initialization
 function tas.init()
 

@@ -24,6 +24,8 @@ local tas = {
 		physics_steer_last_tick = nil,
 		physics_steer_initialized = false,
 		physics_handling = nil,
+		playback_last_vehicle = nil, -- diagnostic-only identity retained until a playback failure
+		playback_failure_reported = false,
 		automation = nil, -- server-orchestrated map/load/playback capture
 		--recording_fbf = false, -- [UNUSED]
 		--fbf_switch = 0, -- [UNUSED]
@@ -529,6 +531,8 @@ function tas.reset_physics_telemetry_state(vehicle)
 	tas.var.physics_steer_last_tick = nil
 	tas.var.physics_steer_initialized = false
 	tas.var.physics_handling = vehicle and getVehicleHandling(vehicle) or nil
+	tas.var.playback_last_vehicle = nil
+	tas.var.playback_failure_reported = false
 end
 
 local function matrix_point(matrix, point)
@@ -2647,10 +2651,69 @@ function tas.analogControl()
 end
 addEventHandler("onClientPreRender", root, tas.analogControl)
 
+-- // Playback failure diagnostics
+-- This is deliberately a single failure-time report. It records whether the
+-- player merely stopped being the vehicle controller, or whether the element
+-- itself disappeared, without adding per-frame I/O or changing playback state.
+local function playback_failure_element_snapshot(element)
+	local snapshot = {present = element ~= nil and isElement(element)}
+	if not snapshot.present then return snapshot end
+
+	snapshot.elementType = getElementType(element)
+	local ok, model = pcall(getElementModel, element)
+	if ok then snapshot.model = model end
+	ok, snapshot.position = pcall(function()
+		local x, y, z = getElementPosition(element)
+		return {x, y, z}
+	end)
+	if not ok then snapshot.position = nil end
+	ok, snapshot.rotation = pcall(function()
+		local x, y, z = getElementRotation(element)
+		return {x, y, z}
+	end)
+	if not ok then snapshot.rotation = nil end
+	ok, snapshot.velocity = pcall(function()
+		local x, y, z = getElementVelocity(element)
+		return {x, y, z}
+	end)
+	if not ok then snapshot.velocity = nil end
+	ok, snapshot.health = pcall(getElementHealth, element)
+	if not ok then snapshot.health = nil end
+	ok, snapshot.dimension = pcall(getElementDimension, element)
+	if not ok then snapshot.dimension = nil end
+	ok, snapshot.interior = pcall(getElementInterior, element)
+	if not ok then snapshot.interior = nil end
+
+	if snapshot.elementType == "vehicle" then
+		ok, snapshot.controllerIsLocalPlayer = pcall(function()
+			return getVehicleController(element) == localPlayer
+		end)
+		if not ok then snapshot.controllerIsLocalPlayer = nil end
+	end
+	return snapshot
+end
+
+function tas.report_playback_failure()
+	if tas.var.playback_failure_reported then return end
+	tas.var.playback_failure_reported = true
+	local frame_data = tas.data[tas.var.play_frame]
+	local occupied = getPedOccupiedVehicle(localPlayer)
+	triggerServerEvent("tas:playbackFailureDiagnostic", localPlayer, {
+		reason = "vehicle_missing_or_not_controller",
+		sourceFrame = tas.var.play_frame,
+		sourceTick = frame_data and frame_data.tick or nil,
+		wallTick = getTickCount(),
+		playerDead = isPedDead(localPlayer),
+		occupiedVehicle = playback_failure_element_snapshot(occupied),
+		lastKnownVehicle = playback_failure_element_snapshot(tas.var.playback_last_vehicle),
+	})
+end
+
 -- // Playbacking
 function tas.render_playback(deltaTime)
 
 	local vehicle = tas.cveh(localPlayer)
+	if vehicle then tas.var.playback_last_vehicle = vehicle end
 	
 	if vehicle and not isPedDead(localPlayer) then
 		
@@ -2806,6 +2869,7 @@ function tas.render_playback(deltaTime)
 	
 	else
 		
+		tas.report_playback_failure()
 		if tas.var.playback_recording then tas.finish_playback_recording(false) end
 		removeEventHandler((tas.settings.playbackPreRender == true and "onClientPreRender" or "onClientRender"), root, tas.render_playback)
 		tas.var.playbacking = false
