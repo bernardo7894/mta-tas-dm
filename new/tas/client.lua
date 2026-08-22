@@ -2698,7 +2698,7 @@ function tas.report_playback_failure()
 	tas.var.playback_failure_reported = true
 	local frame_data = tas.data[tas.var.play_frame]
 	local occupied = getPedOccupiedVehicle(localPlayer)
-	triggerServerEvent("tas:playbackFailureDiagnostic", localPlayer, {
+	local context = {
 		reason = "vehicle_missing_or_not_controller",
 		sourceFrame = tas.var.play_frame,
 		sourceTick = frame_data and frame_data.tick or nil,
@@ -2706,7 +2706,14 @@ function tas.report_playback_failure()
 		playerDead = isPedDead(localPlayer),
 		occupiedVehicle = playback_failure_element_snapshot(occupied),
 		lastKnownVehicle = playback_failure_element_snapshot(tas.var.playback_last_vehicle),
-	})
+	}
+	-- Preserve the snapshot in the physics export as well as the authenticated
+	-- server diagnostic. This survives resource/event ordering failures.
+	if tas.analysis.playback_metadata then
+		tas.analysis.playback_metadata.playbackFailureDiagnostic = context
+	end
+	triggerServerEvent("tas:playbackFailureDiagnostic", localPlayer, context)
+	outputDebugString("[TAS] playback failure diagnostic: "..(toJSON(context, true) or "{}"))
 end
 
 -- // Playbacking

@@ -12,6 +12,8 @@ def test_playback_failure_reports_controller_and_element_state_once():
     assert "playback_last_vehicle" in source
     assert "occupiedVehicle" in source
     assert "lastKnownVehicle" in source
+    assert "playbackFailureDiagnostic = context" in source
+    assert "outputDebugString(\"[TAS] playback failure diagnostic" in source
     assert source.index("tas.report_playback_failure()") < source.rindex(
         "tas.finish_playback_recording(false)"
     )
