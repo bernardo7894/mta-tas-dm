@@ -2793,9 +2793,9 @@ function tas.render_playback(deltaTime)
 
 		-- Diagnostic only: tag native ProcessWheel rows after all controls,
 		-- analog steering, and nitro state for this source frame have been
-		-- written. The next native physics tick therefore observes the same
-		-- control frame as this provenance tag. This changes no playback state
-		-- or physics and is absent on production MTA clients.
+		-- written. Native ProcessWheel scheduling relative to this render
+		-- callback remains a separate timing observation. This changes no
+		-- playback state or physics and is absent on production MTA clients.
 		if setNativeProcessWheelSourceTag then
 			setNativeProcessWheelSourceTag(tas.var.play_frame, frame_data.tick)
 		end

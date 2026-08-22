@@ -122,6 +122,8 @@ def test_one_tick_stable_timer_filter_and_state_hold_are_supported():
 
 def test_source_tag_is_written_after_controls_are_applied():
     source = (TOOL.parents[1] / "new" / "tas" / "client.lua").read_text(encoding="utf-8")
+    capture_tool = TOOL.read_text(encoding="utf-8")
+    assert "after-control-write-render-callback" in capture_tool
     tag = source.index("setNativeProcessWheelSourceTag(tas.var.play_frame, frame_data.tick)")
     controls = source.index("tas.resetBinds()", tag - 6000)
     nitro = source.index("tas.nos(vehicle, frame_data.n)", controls)
