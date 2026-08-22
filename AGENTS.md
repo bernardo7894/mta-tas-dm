@@ -338,7 +338,10 @@ cadence and later vehicle/resource addresses must be treated as contamination.
 The server `JOIN` event is watched both on stdout and the server log because
 redirected Debug-server stdout is not consistently flushed. Keep native rows separate from Lua
 `vehicleTelemetry` fields and preserve their provenance when merging diagnostic
-artifacts. The Debug C++ route also supports
+artifacts. Controls-only playback exports optional `livePosition`,
+`liveVelocity`, and `liveAngularVelocity` fields for the actual local vehicle;
+the ordinary frame p/v/rv fields remain serialized TAS reference state and
+must not be confused with the live fields. The Debug C++ route also supports
 `--cpp-processsuspension-boundary`, which hooks the US 1.0
 `CAutomobile::ProcessSuspension` entry (`0x6AFB10`) through a copied-prologue
 trampoline and writes a fixed `.suspension.bin` stream; convert and audit it

@@ -862,7 +862,7 @@ function tas.capture_playback_frame(vehicle, frame_data, deltaTime)
 	end
 	tas.var.playback_recording_last_tick = capture_tick
 
-	local _, _, _, _, _, _, _, _, _, _, _, analysis = tas.record_state(vehicle)
+	local _, live_p, live_r, live_v, live_rv, _, _, _, _, _, _, analysis = tas.record_state(vehicle)
 	analysis.dt = deltaTime
 	analysis.fps = (deltaTime > 0 and 1000 / deltaTime) or 0
 	if not analysis.groundContacts then
@@ -871,6 +871,14 @@ function tas.capture_playback_frame(vehicle, frame_data, deltaTime)
 	analysis.playbackCapture = true
 	frame_data.x = frame_data.x or {}
 	frame_data.x.matrix = analysis.matrix
+	-- Controls-only playback keeps the serialized TAS p/v/rv fields as the
+	-- reference trajectory. Preserve the independently observed live values in
+	-- the diagnostic extension so native boundary rows can be joined to the
+	-- actual post-physics Lua sample without confusing it with the reference.
+	frame_data.x.livePosition = live_p
+	frame_data.x.liveRotation = live_r
+	frame_data.x.liveVelocity = live_v
+	frame_data.x.liveAngularVelocity = live_rv
 	frame_data.x.wheels = analysis.wheels
 	frame_data.x.controls = analysis.controls
 	frame_data.x.analogControls = analysis.analogControls
@@ -1725,6 +1733,13 @@ function tas.commands(cmd, ...)
 				position = run.p,
 				rotationEuler = run.r,
 				matrix = extra.matrix,
+				-- Controls-only playback keeps these source fields as the
+				-- reference trajectory. Optional live* fields are the actual
+				-- local vehicle state observed by capture_playback_frame.
+				livePosition = extra.livePosition,
+				liveRotation = extra.liveRotation,
+				liveVelocity = extra.liveVelocity,
+				liveAngularVelocity = extra.liveAngularVelocity,
 				velocity = run.v,
 				angularVelocity = run.rv,
 				health = run.h,

@@ -46,7 +46,7 @@ frame, so render-loop frame skips do not leave source frames without telemetry.
 The user's interpolation setting is restored when capture finishes. It writes
 `<output-name>.physics.jsonl`; the source `.tas` playback data is not modified
 on disk.
-Playback captures copy the measured `dt`, `fps`, and `vehicleTelemetry` into each refreshed frame's extended analysis state, so those fields are preserved in the exported format-v3 JSONL.
+Playback captures copy the measured `dt`, `fps`, and `vehicleTelemetry` into each refreshed frame's extended analysis state, so those fields are preserved in the exported format-v3 JSONL. Controls-only diagnostic playback may also publish optional `livePosition`, `liveRotation`, `liveVelocity`, and `liveAngularVelocity` fields. These are the actual local vehicle state observed during playback; the ordinary `position`, `velocity`, and `angularVelocity` fields remain the serialized TAS reference state. Consumers must keep the two provenance classes separate.
 
 - vehicle model
 - FPS limit
