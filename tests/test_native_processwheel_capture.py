@@ -74,6 +74,14 @@ def test_actual_race_duration_guard_preserves_full_playback():
     assert "requires --duration" in source
 
 
+def test_actual_race_map_start_waits_for_client_join():
+    source = TOOL.read_text(encoding="utf-8")
+    assert "server_joined.wait(0.25)" in source
+    assert "start_reference_race_after_join" in source
+    assert "after_server_join_start_race_then_map" in source
+    assert '(25.0, "start race")' not in source
+
+
 def test_loader_mode_disables_mixed_frida_bootstrap():
     tool = _load_tool()
     script = tool._native_script(Path("C:/mta"), "loader", skip_frida_bootstrap=True)

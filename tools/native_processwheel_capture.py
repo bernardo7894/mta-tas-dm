@@ -1321,17 +1321,24 @@ def _prepare_real_vorbis(mta_bin: Path) -> Any:
     return restore
 
 
-def _start_server(path: Path, commands: list[str]) -> tuple[subprocess.Popen[str], threading.Thread]:
+def _start_server(
+    path: Path, commands: list[str]
+) -> tuple[subprocess.Popen[str], threading.Thread, threading.Event]:
     process = subprocess.Popen(
         [str(path)], cwd=str(path.parent), stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
+    joined = threading.Event()
+
     def drain() -> None:
         if process.stdout is None:
             return
         for line in process.stdout:
+            if "JOIN:" in line:
+                joined.set()
             if any(token in line for token in ("Server started", "CONNECT:", "JOIN:", "KICK:", "ERROR:")):
                 print(f"[server] {line.rstrip()}")
+
     thread = threading.Thread(target=drain, daemon=True)
     thread.start()
     # The debug server's stdout is not consistently flushed through the
@@ -1343,7 +1350,7 @@ def _start_server(path: Path, commands: list[str]) -> tuple[subprocess.Popen[str
             process.stdin.write(command + "\n")
             process.stdin.flush()
         time.sleep(2)
-    return process, thread
+    return process, thread, joined
 
 
 def main() -> int:
@@ -1639,13 +1646,28 @@ def main() -> int:
     )
     restore_vorbis = _prepare_real_vorbis(mta_bin) if args.use_real_vorbis else (lambda: None)
     server = None
+    server_joined: threading.Event | None = None
+    server_command_lock = threading.Lock()
     server_command_timers: list[threading.Timer] = []
+    reference_race_cancel = threading.Event()
+    reference_race_thread: threading.Thread | None = None
     scheduled_commands = list(server_commands_after)
+
+    def send_server_command(command: str) -> None:
+        if server is None or server.poll() is not None or server.stdin is None:
+            return
+        try:
+            with server_command_lock:
+                server.stdin.write(command + "\r\n")
+                server.stdin.flush()
+            print(f"[server-cmd-after] {command}")
+        except OSError as exc:
+            print(f"[server-cmd-after-error] {exc}")
     if args.server_exe:
         if args.reference_map_resource:
             # Keep the real map stopped until the debug client has joined.
-            # Race ends an empty map quickly, while direct Frida/loader startup
-            # commonly takes about 30 seconds on this machine.
+            # Race ends an empty map, and direct Frida/loader startup can be
+            # much slower than a fixed wall-clock schedule.
             server_commands = [
                 "refresh",
                 "stop play",
@@ -1654,24 +1676,29 @@ def main() -> int:
             ]
         else:
             server_commands = ["refresh", *[f"start {name}" for name in args.start_resource]]
-        server, _ = _start_server(args.server_exe.resolve(), server_commands)
+        server, _, server_joined = _start_server(args.server_exe.resolve(), server_commands)
         scheduled_commands = list(server_commands_after)
         if args.reference_map_resource:
-            scheduled_commands.extend([
-                (25.0, "start race"),
-                (27.0, f"start {args.reference_map_resource}"),
-            ])
-        for delay, command in scheduled_commands:
-            def send_command(command: str = command) -> None:
-                if server is None or server.poll() is not None or server.stdin is None:
+            def start_reference_race_after_join() -> None:
+                assert server_joined is not None
+                while not server_joined.wait(0.25):
+                    if reference_race_cancel.is_set():
+                        return
+                if reference_race_cancel.is_set():
                     return
-                try:
-                    server.stdin.write(command + "\r\n")
-                    server.stdin.flush()
-                    print(f"[server-cmd-after] {command}")
-                except OSError as exc:
-                    print(f"[server-cmd-after-error] {command}: {exc}")
-            timer = threading.Timer(delay, send_command)
+                send_server_command("start race")
+                if reference_race_cancel.wait(2.0):
+                    return
+                send_server_command(f"start {args.reference_map_resource}")
+
+            reference_race_thread = threading.Thread(
+                target=start_reference_race_after_join,
+                name="native-capture-start-reference-race-after-join",
+                daemon=True,
+            )
+            reference_race_thread.start()
+        for delay, command in scheduled_commands:
+            timer = threading.Timer(delay, send_server_command, args=(command,))
             timer.daemon = True
             timer.start()
             server_command_timers.append(timer)
@@ -1744,6 +1771,11 @@ def main() -> int:
             {"delay_s": delay, "command": command}
             for delay, command in scheduled_commands
         ],
+        "reference_map_start": (
+            "after_server_join_start_race_then_map"
+            if args.reference_map_resource
+            else "not_applicable"
+        ),
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
     meta_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -1838,8 +1870,11 @@ def main() -> int:
     try:
         time.sleep(max(0.0, args.duration))
     finally:
+        reference_race_cancel.set()
         for timer in server_command_timers:
             timer.cancel()
+        if reference_race_thread is not None:
+            reference_race_thread.join(timeout=1.0)
         # Kill first: a Frida session with a busy callback queue can block
         # indefinitely while detaching from the debug client.
         try:
