@@ -1615,6 +1615,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--cpp-stage-only",
+        action="store_true",
+        help=(
+            "use only the lower-overhead C++ ProcessControl/ProcessSuspension "
+            "boundary observers; do not install the ProcessWheel hook"
+        ),
+    )
+    parser.add_argument(
         "--cpp-minimal",
         action="store_true",
         help=(
@@ -1705,6 +1713,10 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if args.cpp_stage_only:
+        args.cpp_hook = True
+        args.cpp_processcontrol_boundary = True
+        args.cpp_processsuspension_boundary = True
     if args.cpp_minimal or args.cpp_no_matrix:
         args.cpp_hook = True
     playback_modes = sum(
@@ -1719,6 +1731,8 @@ def main() -> int:
         parser.error("playback-only diagnostic modes are mutually exclusive")
     if args.cpp_minimal and args.cpp_no_matrix:
         parser.error("--cpp-minimal and --cpp-no-matrix are mutually exclusive")
+    if args.cpp_stage_only and (args.cpp_minimal or args.cpp_no_matrix):
+        parser.error("--cpp-stage-only cannot be combined with wheel capture options")
     if args.cpp_hook and args.timing_only:
         parser.error("--cpp-hook and --timing-only are mutually exclusive")
     if args.static_skid_diagnostics and (args.cpp_hook or args.timing_only):
@@ -1764,6 +1778,8 @@ def main() -> int:
             )
     if args.suspension_stage_only and (not args.collision_diagnostics or args.cpp_hook or args.timing_only):
         parser.error("--suspension-stage-only requires Frida --collision-diagnostics")
+    if args.cpp_stage_only and args.timing_only:
+        parser.error("--cpp-stage-only cannot be combined with --timing-only")
     server_commands_after: list[tuple[float, str]] = []
     for raw_delay, command in args.server_command_after:
         try:
@@ -1812,10 +1828,13 @@ def main() -> int:
         if timing_output.exists():
             timing_output.unlink()
     if args.cpp_hook:
-        cpp_binary.parent.mkdir(parents=True, exist_ok=True)
-        if cpp_binary.exists():
-            cpp_binary.unlink()
-        os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT"] = str(cpp_binary.resolve())
+        if not args.cpp_stage_only:
+            cpp_binary.parent.mkdir(parents=True, exist_ok=True)
+            if cpp_binary.exists():
+                cpp_binary.unlink()
+            os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT"] = str(cpp_binary.resolve())
+        else:
+            os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_OUTPUT", None)
         if args.cpp_minimal:
             os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_MINIMAL"] = "1"
         if args.cpp_no_matrix:
@@ -2052,7 +2071,8 @@ def main() -> int:
             if args.timing_only
             else "Frida entry hook"
         ),
-        "cpp_binary": str(cpp_binary.resolve()) if args.cpp_hook else "",
+        "cpp_binary": str(cpp_binary.resolve())
+        if args.cpp_hook and not args.cpp_stage_only else "",
         "cpp_control_binary": (
             str(cpp_control_binary.resolve())
             if args.cpp_processcontrol_boundary else ""
@@ -2086,10 +2106,12 @@ def main() -> int:
             else "not_applicable"
         ),
         "cpp_capture_level": (
-            "minimal" if args.cpp_minimal
+            "stage-only" if args.cpp_stage_only
+            else "minimal" if args.cpp_minimal
             else "no-matrix" if args.cpp_no_matrix
             else "full" if args.cpp_hook else "none"
         ),
+        "cpp_stage_only": bool(args.cpp_stage_only),
         "prepare_tas_folder": bool(args.prepare_tas_folder),
         "controls_only_playback": bool(args.controls_only_playback),
         "pose_only_playback": bool(args.pose_only_playback),

@@ -307,11 +307,15 @@ playback window before the map exists. For a normal local Debug client launch,
 `--launcher-exe "...\\Multi Theft Auto_d.exe"` starts the real launcher and
 attaches the observer to its new `gta_sa.exe` child only after server `JOIN`,
 which avoids perturbing the launcher's L3 startup. The C++ ProcessWheel hook
-is already active in inherited `multiplayer_sa_d.dll` before that late attach.
+is already active in inherited `multiplayer_sa_d.dll` before that late attach;
+`--cpp-stage-only` instead leaves that hook disabled while retaining the direct
+boundary observers.
 `--cpp-processcontrol-boundary` enables the matching direct
 `CAutomobile::ProcessControl` entry/exit stream (`.control.bin`), and
 `--cpp-processcontrol-source-window START END` limits it to a source-tagged
-window; convert it with
+window. `--cpp-stage-only` enables the ProcessControl and ProcessSuspension
+boundary streams without installing ProcessWheel; it is a lower-overhead
+causal diagnostic, still subject to the strict timer-step gate. Convert it with
 `infernus-physics/tools/convert_native_processcontrol_cpp.py` and audit it
 with `infernus-physics/tools/audit_native_processcontrol_boundary.py`. This
 observer is diagnostic only because its extra reads can perturb render/source

@@ -178,6 +178,15 @@ def test_cpp_collision_stream_flushes_partial_batches():
     assert '"cpp_collision_flush_every"' in source
 
 
+def test_cpp_stage_only_selects_boundary_observers_without_wheel_output():
+    source = TOOL.read_text(encoding="utf-8")
+    assert '"--cpp-stage-only"' in source
+    assert 'args.cpp_stage_only' in source
+    assert 'MTA_NATIVE_PROCESSCONTROL_CPP_OUTPUT' in source
+    assert 'MTA_NATIVE_PROCESSSUSPENSION_CPP_OUTPUT' in source
+    assert 'not args.cpp_stage_only' in source
+
+
 def test_cpp_processcontrol_boundary_source_window_is_explicit_diagnostic():
     source = TOOL.read_text(encoding="utf-8")
     assert '"--cpp-processcontrol-boundary"' in source
