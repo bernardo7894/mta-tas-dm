@@ -291,9 +291,13 @@ of ordinary MTA recordings. `native_processwheel_capture.py --prepare-tas-folder
 temporarily switches the local TAS resource to its public `saves` folder so
 large automated playback inputs are available without manual copying, then
 restores the file. `--playback-output-name` selects a unique output name and
-`--controls-only-playback` restores independent control replay. Keep native rows
-separate from Lua `vehicleTelemetry` fields and preserve their provenance when
-merging diagnostic artifacts. A `*** NETWORK TROUBLE ***` overlay invalidates a
+`--controls-only-playback` restores independent control replay. In
+`--reference-map-resource` actual-race mode, the harness starts `race` and the
+real map only after the server reports the client `JOIN`; `--duration` is the
+post-JOIN retention budget, so a slow loader cannot consume the complete TAS
+playback window before the map exists. Keep native rows separate from Lua
+`vehicleTelemetry` fields and preserve their provenance when merging diagnostic
+artifacts. A `*** NETWORK TROUBLE ***` overlay invalidates a
 capture: `CNetAPI::DoPulse` raises it after a recent puresync enqueue and 10
 seconds without processed return-sync, then freezes controls and vehicle
 move/turn state. It is client recovery behavior, not a physics result; apply
