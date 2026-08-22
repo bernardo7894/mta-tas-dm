@@ -159,6 +159,16 @@ def test_cpp_collision_stream_flushes_partial_batches():
     assert '"cpp_collision_flush_every"' in source
 
 
+def test_cpp_processcontrol_boundary_source_window_is_explicit_diagnostic():
+    source = TOOL.read_text(encoding="utf-8")
+    assert '"--cpp-processcontrol-boundary"' in source
+    assert '"--cpp-processcontrol-source-window"' in source
+    assert 'MTA_NATIVE_PROCESSCONTROL_CPP_START_FRAME' in source
+    assert 'MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME' in source
+    assert 'cpp_processcontrol_boundary' in source
+    assert 'cpp_processcontrol_source_window' in source
+
+
 def test_actual_race_capture_removes_synthetic_map_and_polls_race_vehicle(tmp_path):
     tool = _load_tool()
     resource = (

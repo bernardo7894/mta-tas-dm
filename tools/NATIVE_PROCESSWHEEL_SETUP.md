@@ -183,8 +183,15 @@ python tools/native_processwheel_capture.py `
 ```
 
 For the lower-overhead build, add `--cpp-hook`; after playback, convert the
-sibling binary stream. Combining `--cpp-hook --collision-diagnostics` also
-writes a `.collision.bin` stream from the two verified `ApplyCollisionAlt`
+sibling binary stream. `--cpp-processcontrol-boundary` additionally writes a
+`.control.bin` stream of direct `CAutomobile::ProcessControl` entry/exit
+state; limit it with `--cpp-processcontrol-source-window START END` when
+investigating a bounded source window. Convert it with
+`infernus-physics/tools/convert_native_processcontrol_cpp.py` and audit it
+with `infernus-physics/tools/audit_native_processcontrol_boundary.py`. This
+stream is diagnostic only: its observer can perturb render/source cadence,
+so it must not be used as continuous trajectory evidence. Combining
+`--cpp-hook --collision-diagnostics` also writes a `.collision.bin` stream from the two verified `ApplyCollisionAlt`
 call sites (`0x54C9FA`, `0x54CAC2`). The harness automatically enables the
 diagnostic `MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY=1` mode so a final partial
 batch is persisted; metadata records `cpp_collision_flush_every=true`. Convert

@@ -1576,6 +1576,24 @@ def main() -> int:
         help="enable the C++ direct read of bAlreadySkidding at 0xC1CDAC",
     )
     parser.add_argument(
+        "--cpp-processcontrol-boundary",
+        action="store_true",
+        help=(
+            "capture source ProcessControl entry/exit state in the optional "
+            "C++ boundary stream; diagnostic only"
+        ),
+    )
+    parser.add_argument(
+        "--cpp-processcontrol-source-window",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        help=(
+            "limit the C++ ProcessControl boundary stream to inclusive source "
+            "frame tags; requires --cpp-processcontrol-boundary"
+        ),
+    )
+    parser.add_argument(
         "--timing-only",
         action="store_true",
         help="run the automated playback with no ProcessWheel hook and report timer samples",
@@ -1639,6 +1657,14 @@ def main() -> int:
         parser.error("--static-skid-diagnostics requires the Frida ProcessWheel route")
     if args.cpp_static_skid_diagnostics and not args.cpp_hook:
         parser.error("--cpp-static-skid-diagnostics requires --cpp-hook")
+    if args.cpp_processcontrol_boundary and not args.cpp_hook:
+        parser.error("--cpp-processcontrol-boundary requires --cpp-hook")
+    if args.cpp_processcontrol_source_window and not args.cpp_processcontrol_boundary:
+        parser.error("--cpp-processcontrol-source-window requires --cpp-processcontrol-boundary")
+    if args.cpp_processcontrol_source_window:
+        start_frame, end_frame = args.cpp_processcontrol_source_window
+        if start_frame < 1 or end_frame < start_frame:
+            parser.error("invalid C++ ProcessControl source window")
     if args.launcher_exe and args.prepare_gta_import:
         parser.error("--launcher-exe uses the normal launcher and cannot use --prepare-gta-import")
     if args.playback_output_name and not args.playback_output_name.replace("-", "").replace("_", "").isalnum():
@@ -1689,10 +1715,20 @@ def main() -> int:
     _kill_targets()
     mta_bin = args.mta_bin.resolve()
     cpp_binary = args.output.with_suffix(args.output.suffix + ".cpp.bin")
+    cpp_control_binary = args.output.with_suffix(args.output.suffix + ".control.bin")
     cpp_collision_binary = args.output.with_suffix(args.output.suffix + ".collision.bin")
     timing_output = args.output.with_suffix(args.output.suffix + ".timing.jsonl")
     previous_collision_flush_every = os.environ.get(
         "MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY"
+    )
+    previous_processcontrol_output = os.environ.get(
+        "MTA_NATIVE_PROCESSCONTROL_CPP_OUTPUT"
+    )
+    previous_processcontrol_start = os.environ.get(
+        "MTA_NATIVE_PROCESSCONTROL_CPP_START_FRAME"
+    )
+    previous_processcontrol_end = os.environ.get(
+        "MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME"
     )
     previous_mta_bin = os.environ.get("MTA_BIN")
     previous_capture_diagnostics = os.environ.get("MTA_NATIVE_CAPTURE_DIAGNOSTICS")
@@ -1712,6 +1748,20 @@ def main() -> int:
             os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_NO_MATRIX"] = "1"
         if args.cpp_static_skid_diagnostics:
             os.environ["MTA_NATIVE_PROCESSWHEEL_CPP_STATIC_LATCH"] = "1"
+        if args.cpp_processcontrol_boundary:
+            cpp_control_binary.parent.mkdir(parents=True, exist_ok=True)
+            if cpp_control_binary.exists():
+                cpp_control_binary.unlink()
+            os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_OUTPUT"] = str(
+                cpp_control_binary.resolve()
+            )
+            if args.cpp_processcontrol_source_window:
+                os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_START_FRAME"] = str(
+                    args.cpp_processcontrol_source_window[0]
+                )
+                os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME"] = str(
+                    args.cpp_processcontrol_source_window[1]
+                )
         if args.collision_diagnostics:
             if cpp_collision_binary.exists():
                 cpp_collision_binary.unlink()
@@ -1916,6 +1966,15 @@ def main() -> int:
             else "Frida entry hook"
         ),
         "cpp_binary": str(cpp_binary.resolve()) if args.cpp_hook else "",
+        "cpp_control_binary": (
+            str(cpp_control_binary.resolve())
+            if args.cpp_processcontrol_boundary else ""
+        ),
+        "cpp_processcontrol_boundary": bool(args.cpp_processcontrol_boundary),
+        "cpp_processcontrol_source_window": (
+            list(args.cpp_processcontrol_source_window)
+            if args.cpp_processcontrol_source_window else None
+        ),
         "cpp_collision_binary": (
             str(cpp_collision_binary.resolve())
             if args.cpp_hook and args.collision_diagnostics else ""
@@ -2141,6 +2200,15 @@ def main() -> int:
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_MINIMAL", None)
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_NO_MATRIX", None)
                 os.environ.pop("MTA_NATIVE_PROCESSWHEEL_CPP_STATIC_LATCH", None)
+                os.environ.pop("MTA_NATIVE_PROCESSCONTROL_CPP_OUTPUT", None)
+                os.environ.pop("MTA_NATIVE_PROCESSCONTROL_CPP_START_FRAME", None)
+                os.environ.pop("MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME", None)
+                if previous_processcontrol_output is not None:
+                    os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_OUTPUT"] = previous_processcontrol_output
+                if previous_processcontrol_start is not None:
+                    os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_START_FRAME"] = previous_processcontrol_start
+                if previous_processcontrol_end is not None:
+                    os.environ["MTA_NATIVE_PROCESSCONTROL_CPP_END_FRAME"] = previous_processcontrol_end
                 os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_OUTPUT", None)
                 if previous_collision_flush_every is None:
                     os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY", None)

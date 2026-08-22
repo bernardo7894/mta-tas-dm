@@ -300,6 +300,14 @@ playback window before the map exists. For a normal local Debug client launch,
 attaches the observer to its new `gta_sa.exe` child only after server `JOIN`,
 which avoids perturbing the launcher's L3 startup. The C++ ProcessWheel hook
 is already active in inherited `multiplayer_sa_d.dll` before that late attach.
+`--cpp-processcontrol-boundary` enables the matching direct
+`CAutomobile::ProcessControl` entry/exit stream (`.control.bin`), and
+`--cpp-processcontrol-source-window START END` limits it to a source-tagged
+window; convert it with
+`infernus-physics/tools/convert_native_processcontrol_cpp.py` and audit it
+with `infernus-physics/tools/audit_native_processcontrol_boundary.py`. This
+observer is diagnostic only because its extra reads can perturb render/source
+cadence and later vehicle/resource addresses must be treated as contamination.
 The server `JOIN` event is watched both on stdout and the server log because
 redirected Debug-server stdout is not consistently flushed. Keep native rows separate from Lua
 `vehicleTelemetry` fields and preserve their provenance when merging diagnostic
