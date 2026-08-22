@@ -28,22 +28,34 @@
    This is a harness launch aid only; it does not change GTA vehicle forces.
 The native hook filters `m_nModelIndex == 411` before recording, so map
 vehicles do not contaminate the Infernus stream.
-4. Prepare a local server resource that creates the model-411 vehicle and
-   starts the TAS playback. Set the local server `<fpslimit>` to `100` to
-   match the reference recording; the previous default `74` changes native
-   timer cadence. The validated local server also disabled anti-cheats `4,56`
-   because the debug client was rejected by those checks.
+4. For a synthetic smoke capture, prepare a local server resource that
+   creates the model-411 vehicle and starts TAS playback. For continuous Etnies
+   evidence, instead use `--reference-map-resource
+   race-dm-Skynetv5-EtniesII(fix)` with `--prepare-tas-folder`. That mode stops
+   the autostart `play` gamemode, starts the actual `race` gamemode and Etnies
+   map resource, including `asd.lua`, `CSM.lua`, `palm2.lua`, and the map's
+   race settings, then temporarily turns `native_capture` into a trigger-only
+   resource that waits for the race's occupied Infernus. It restores the
+   synthetic resource after cleanup. Set the local server `<fpslimit>` to
+   `100` to match the reference recording; the previous default `74` changes
+   native timer cadence. The validated local server also disabled anti-cheats
+   `4,56` because the debug client was rejected by those checks.
 
 The tool's `--prepare-registry`, `--prepare-gta-import`, `--prepare-tas-folder`, `--controls-only-playback`, `--playback-output-name`, and `--use-real-vorbis` options temporarily
 point the 32-bit MTA registry location at the debug tree, redirect the
 GTA `WINMM.dll` import to the local `mtasa.dll` loader proxy, and replace the
 `vorbisfile.dll` loader proxy with the local `vorbisfile_real.dll`. Both
-binary changes are restored in the cleanup path. Without
-`--prepare-gta-import`, direct spawning of an unpatched executable can show
-“MTA: Unable to find winmm.dll import entry.” Use `--tas-automation-playback` when the ordinary
-`native_capture:start` client event is lost during resource startup; it
-triggers the TAS resource-root automation event directly while preserving the
-same controls-only playback and source-frame tagging path. The
+binary changes are restored in the cleanup path. Direct-Frida mode should
+leave the GTA import as `WINMM.dll` and uses the self-contained Frida
+bootstrap; loader mode uses `--prepare-gta-import` and disables that Frida
+bootstrap so the loader and Frida never initialize core twice. An interrupted
+run is recovered by the next launch's process-kill and side-by-side restore
+checks. Without `--prepare-gta-import`, direct spawning of an unpatched
+executable can show “MTA: Unable to find winmm.dll import entry” only when a
+loader proxy has been invoked in the wrong bootstrap state. Use
+`--tas-automation-playback` only for the synthetic resource when the ordinary
+`native_capture:start` client event is lost; actual-race mode uses its
+trigger-only resource and the real race vehicle. The
 `--server-command-after 45 "restart
 native_capture"` option can schedule a same-process resource/vehicle restart
 from the server console for lifecycle captures; it uses the console's CRLF
@@ -131,7 +143,7 @@ python tools/native_processwheel_capture.py `
   --mta-bin "D:\Users\Bernardo\Documents\mtasa-blue\Bin" `
   --server-exe "D:\Users\Bernardo\Documents\mtasa-blue\Bin\server\MTA Server_d.exe" `
   --start-resource tas --start-resource native_capture `
-  --tas-automation-playback --prepare-gta-import `
+  --tas-automation-playback `
   --orchestrator "C:\Users\berna\mtasa_deobfuscation\mta_bytecode_orchestrator.py" `
   --prepare-registry --prepare-tas-folder --controls-only-playback --playback-output-name native-etnies-auto --use-real-vorbis `
   --output "..\infernus-physics\generated\native-processwheel.jsonl"

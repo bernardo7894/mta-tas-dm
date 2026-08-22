@@ -56,6 +56,7 @@ def _native_script(
     static_skid_diagnostics: bool = False,
     capture_from_first_gas: bool = False,
     one_tick_config: dict[str, Any] | None = None,
+    skip_frida_bootstrap: bool = False,
 ) -> str:
     bin_dir = _js_string(str(mta_bin))
     mta_dir = _js_string(str(mta_bin / "MTA"))
@@ -132,12 +133,16 @@ function callBootstrap() {{
 
 // GTA calls this on its main thread during startup.  Keeping bootstrap here,
 // rather than in a Frida timer, preserves the game's thread/order semantics.
+// In loader mode the patched mtasa.dll owns this step; attaching a second
+// Frida bootstrap would create mixed/double core initialization.
+if (!{str(skip_frida_bootstrap).lower()}) {{
 try {{
     const gv = Process.getModuleByName('kernel32.dll').findExportByName('GetVersionExA');
     Interceptor.attach(gv, {{ onEnter() {{
         if (!bootstrapDone) {{ try {{ callBootstrap(); }} catch(e) {{ send({{type:'native_bootstrap_error', message:String(e)}}); }} }}
     }} }});
 }} catch(e) {{ send({{type:'native_bootstrap_error', message:String(e)}}); }}
+}}
 
 if (INSTALL_NATIVE_WHEEL_HOOK) {{
 (function installNativeWheelHook() {{
@@ -781,7 +786,9 @@ def _timing_probe_script() -> str:
 def _kill_targets() -> None:
     for process in psutil.process_iter(["name"]):
         if (process.info["name"] or "").lower() in {
-            "gta_sa.exe", "mta server_d.exe", "mta server.exe", "multi theft auto_d.exe"
+            "gta_sa.exe", "gta-sa.exe", "mta server_d.exe", "mta server.exe",
+            "multi theft auto_d.exe", "multi theft auto.exe", "mtasa.exe",
+            "frida-helper32.exe", "frida-helper.exe"
         }:
             try:
                 process.kill()
@@ -814,8 +821,13 @@ def _prepare_gta_import(gta_exe: Path) -> Any:
         patched = original[:offset] + after + original[offset + len(before):]
         gta_exe.write_bytes(patched)
     elif after in original:
-        # Already redirected; direct capture can proceed without taking
-        # ownership of restoration.
+        # Recover a patch left behind by an interrupted loader-mode run before
+        # deciding whether this invocation needs to patch anything.
+        backup = gta_exe.with_name(gta_exe.name + ".native-capture-original")
+        if backup.exists():
+            backup_bytes = backup.read_bytes()
+            if before in backup_bytes:
+                gta_exe.write_bytes(backup_bytes)
         return lambda: None
     else:
         return lambda: None
@@ -987,13 +999,102 @@ def _prepare_native_capture_output(mta_bin: Path, output_name: str) -> Any:
     return restore
 
 
-def _prepare_tas_automation_playback(mta_bin: Path, output_name: str) -> Any:
-    """Trigger TAS playback from the TAS resource root, bypassing native_capture's client event.
+def _prepare_actual_race_capture(
+    mta_bin: Path, record_name: str, output_name: str
+) -> Any:
+    """Turn ``native_capture`` into a race-vehicle playback trigger.
 
-    Some local MTA resource-start orders can deliver the vehicle creation but
-    not the diagnostic native_capture client event.  The TAS automation event
-    is already designed to wait for the occupied vehicle and calls the same
-    playback callback that writes source-frame tags.
+    The real Etnies resource must own the map, vehicle, scripts, and race
+    settings.  The normal native_capture resource also declares a duplicate
+    map and creates its own vehicle, so actual-race mode temporarily removes
+    that map/client declaration and uses the resource only to poll for the
+    occupied race Infernus before triggering TAS playback.
+    """
+    resource = (
+        mta_bin / "server" / "mods" / "deathmatch" / "resources" / "native_capture"
+    )
+    meta = resource / "meta.xml"
+    server = resource / "server.lua"
+    if not meta.exists() or not server.exists():
+        raise RuntimeError(f"actual-race trigger resource is incomplete: {resource}")
+    meta_backup = meta.with_name(meta.name + ".native-capture-original")
+    server_backup = server.with_name(server.name + ".native-capture-original")
+    current_meta = meta.read_bytes()
+    current_server = server.read_bytes()
+    if b"Native race capture trigger" in current_meta and meta_backup.exists():
+        meta.write_bytes(meta_backup.read_bytes())
+        current_meta = meta.read_bytes()
+    if b"local timers = {}" in current_server and server_backup.exists():
+        server.write_bytes(server_backup.read_bytes())
+        current_server = server.read_bytes()
+    original_meta = current_meta
+    original_server = current_server
+    if not meta_backup.exists():
+        meta_backup.write_bytes(original_meta)
+    if not server_backup.exists():
+        server_backup.write_bytes(original_server)
+    newline = "\r\n" if b"\r\n" in original_meta else "\n"
+    record_literal = json.dumps(record_name)
+    output_literal = json.dumps(output_name)
+    trigger_server = f'''local timers = {{}}
+local sent = {{}}
+
+local function stopPoll(player)
+    local timer = timers[player]
+    if timer and isTimer(timer) then killTimer(timer) end
+    timers[player] = nil
+end
+
+local function poll(player)
+    if not isElement(player) then stopPoll(player) return end
+    if sent[player] then stopPoll(player) return end
+    local vehicle = getPedOccupiedVehicle(player)
+    if not vehicle or getElementModel(vehicle) ~= 411 then return end
+    local tasResource = getResourceFromName("tas")
+    if not tasResource or getResourceState(tasResource) ~= "running" then return end
+    sent[player] = true
+    stopPoll(player)
+    triggerClientEvent(player, "tas:automationStart", getResourceRootElement(tasResource),
+        1, {record_literal}, {output_literal})
+end
+
+local function arm(player)
+    if isElement(player) and not timers[player] and not sent[player] then
+        timers[player] = setTimer(poll, 250, 0, player)
+    end
+end
+
+addEventHandler("onPlayerJoin", root, function() arm(source) end)
+addEventHandler("onResourceStart", resourceRoot, function()
+    for _, player in ipairs(getElementsByType("player")) do arm(player) end
+end)
+addEventHandler("onPlayerQuit", root, function()
+    stopPoll(source)
+    sent[source] = nil
+end)
+'''.replace("\n", newline)
+    trigger_meta = (
+        '<meta>\n'
+        '  <info name="Native race capture trigger" type="script" />\n'
+        '  <script src="server.lua" type="server" />\n'
+        '</meta>\n'
+    ).replace("\n", newline)
+    meta.write_bytes(trigger_meta.encode("utf-8"))
+    server.write_bytes(trigger_server.encode("utf-8"))
+
+    def restore() -> None:
+        meta.write_bytes(original_meta)
+        server.write_bytes(original_server)
+
+    return restore
+
+
+def _prepare_tas_automation_playback(mta_bin: Path, output_name: str) -> Any:
+    """Trigger TAS playback from native_capture without changing its vehicle.
+
+    This legacy mode is retained for the synthetic native_capture map.  It
+    replaces whichever nativeCapture event line is currently deployed rather
+    than requiring a particular stale output-name literal.
     """
     server = (
         mta_bin / "server" / "mods" / "deathmatch" / "resources"
@@ -1002,23 +1103,28 @@ def _prepare_tas_automation_playback(mta_bin: Path, output_name: str) -> Any:
     if not server.exists():
         return lambda: None
     original = server.read_bytes()
-    newline = b"\r\n" if b"\r\n" in original else b"\n"
-    marker = (
-        '    triggerClientEvent(player, "nativeCapture:start", resourceRoot, '
-        '"etnies-native", "native-etnies")'
-    ).encode("ascii")
-    if original.count(marker) != 1:
+    text = original.decode("utf-8")
+    lines = text.splitlines(keepends=True)
+    matches = [
+        index for index, line in enumerate(lines)
+        if 'triggerClientEvent(player, "nativeCapture:start", resourceRoot,' in line
+    ]
+    if len(matches) != 1:
         return lambda: None
+    index = matches[0]
+    line = lines[index]
+    line_ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+    indent = line[:len(line) - len(line.lstrip())]
     replacement = (
-        "    local tasResource = getResourceFromName(\"tas\")\n"
-        "    if tasResource and getResourceState(tasResource) == \"running\" then\n"
-        "        triggerClientEvent(player, \"tas:automationStart\", "
-        "getResourceRootElement(tasResource), 1, \"etnies-native\", "
-        + json.dumps(output_name)
-        + ")\n"
-        "    end"
-    ).replace("\n", newline.decode("ascii")).encode("ascii")
-    server.write_bytes(original.replace(marker, replacement, 1))
+        f'{indent}local tasResource = getResourceFromName("tas"){line_ending}'
+        f'{indent}if tasResource and getResourceState(tasResource) == "running" then{line_ending}'
+        f'{indent}    triggerClientEvent(player, "tas:automationStart", '
+        f'getResourceRootElement(tasResource), 1, "etnies-native", '
+        f'{json.dumps(output_name)}){line_ending}'
+        f'{indent}end{line_ending}'
+    )
+    lines[index] = replacement
+    server.write_bytes("".join(lines).encode("utf-8"))
 
     def restore() -> None:
         server.write_bytes(original)
@@ -1244,6 +1350,18 @@ def main() -> int:
     parser.add_argument("--server-exe", type=Path)
     parser.add_argument("--start-resource", action="append", default=[])
     parser.add_argument(
+        "--reference-map-resource",
+        help=(
+            "run the actual race map resource instead of synthetic native_capture; "
+            "stop play, start race, start this map, then trigger TAS from the race vehicle"
+        ),
+    )
+    parser.add_argument(
+        "--reference-record-name",
+        default="etnies-native",
+        help="TAS .tas basename used by --reference-map-resource",
+    )
+    parser.add_argument(
         "--server-command-after",
         action="append",
         nargs=2,
@@ -1401,6 +1519,14 @@ def main() -> int:
         parser.error("--cpp-static-skid-diagnostics requires --cpp-hook")
     if args.playback_output_name and not args.playback_output_name.replace("-", "").replace("_", "").isalnum():
         parser.error("--playback-output-name may contain only letters, numbers, '-' and '_'")
+    if not args.reference_record_name.replace("-", "").replace("_", "").isalnum():
+        parser.error("--reference-record-name may contain only letters, numbers, '-' and '_'")
+    if args.reference_map_resource and (not args.server_exe or args.tas_automation_playback):
+        parser.error("--reference-map-resource requires --server-exe and cannot use --tas-automation-playback")
+    if args.reference_map_resource and not args.prepare_tas_folder:
+        parser.error("--reference-map-resource requires --prepare-tas-folder so the local TAS file is available")
+    if args.reference_map_resource and any("\r" in value or "\n" in value for value in (args.reference_map_resource,)):
+        parser.error("--reference-map-resource must be a single server resource name")
     if args.playback_start_delay_ms < 0:
         parser.error("--playback-start-delay-ms must be non-negative")
     if args.suspension_stage_only and (not args.collision_diagnostics or args.cpp_hook or args.timing_only):
@@ -1455,8 +1581,15 @@ def main() -> int:
             # capture merely because its final partial batch was never flushed.
             os.environ["MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY"] = "1"
     os.environ["MTA_BIN"] = str(mta_bin)
+    playback_output_name = args.playback_output_name or "native-etnies"
     restore_registry = _prepare_registry(mta_bin) if args.prepare_registry else (lambda: None)
     restore_tas_folder = _prepare_public_tas_folder(mta_bin) if args.prepare_tas_folder else (lambda: None)
+    restore_actual_race = (
+        _prepare_actual_race_capture(
+            mta_bin, args.reference_record_name, playback_output_name
+        )
+        if args.reference_map_resource else (lambda: None)
+    )
     restore_pose_linear_only = (
         _prepare_pose_linear_only_playback(mta_bin)
         if args.pose_linear_only_playback else (lambda: None)
@@ -1473,7 +1606,6 @@ def main() -> int:
         _prepare_one_tick_resource(mta_bin, one_tick_config)
         if one_tick_config is not None else (lambda: None)
     )
-    playback_output_name = args.playback_output_name or "native-etnies"
     restore_capture_output = (
         _prepare_native_capture_output(mta_bin, args.playback_output_name)
         if args.playback_output_name and not args.tas_automation_playback else (lambda: None)
@@ -1488,12 +1620,28 @@ def main() -> int:
     restore_vorbis = _prepare_real_vorbis(mta_bin) if args.use_real_vorbis else (lambda: None)
     server = None
     server_command_timers: list[threading.Timer] = []
+    scheduled_commands = list(server_commands_after)
     if args.server_exe:
-        server, _ = _start_server(
-            args.server_exe.resolve(),
-            ["refresh", *[f"start {name}" for name in args.start_resource]],
-        )
-        for delay, command in server_commands_after:
+        if args.reference_map_resource:
+            # Keep the real map stopped until the debug client has joined.
+            # Race ends an empty map quickly, while direct Frida/loader startup
+            # commonly takes about 30 seconds on this machine.
+            server_commands = [
+                "refresh",
+                "stop play",
+                "start tas",
+                "start native_capture",
+            ]
+        else:
+            server_commands = ["refresh", *[f"start {name}" for name in args.start_resource]]
+        server, _ = _start_server(args.server_exe.resolve(), server_commands)
+        scheduled_commands = list(server_commands_after)
+        if args.reference_map_resource:
+            scheduled_commands.extend([
+                (25.0, "start race"),
+                (27.0, f"start {args.reference_map_resource}"),
+            ])
+        for delay, command in scheduled_commands:
             def send_command(command: str = command) -> None:
                 if server is None or server.poll() is not None or server.stdin is None:
                     return
@@ -1527,6 +1675,10 @@ def main() -> int:
         "gta_executable": str(gta),
         "mta_bin": str(args.mta_bin.resolve()),
         "prepare_gta_import": bool(args.prepare_gta_import),
+        "frida_bootstrap": not bool(args.prepare_gta_import),
+        "reference_map_resource": args.reference_map_resource or "",
+        "reference_record_name": args.reference_record_name,
+        "actual_race_capture": bool(args.reference_map_resource),
         "process_wheel_va": hex(IMAGE_BASE + PROCESS_WHEEL_RVA),
         "process_wheel_rva": hex(PROCESS_WHEEL_RVA),
         "direct_observable": "CVehicle::ProcessWheel entry arguments and vehicle state",
@@ -1563,14 +1715,14 @@ def main() -> int:
         "controls_only_playback": bool(args.controls_only_playback),
         "pose_only_playback": bool(args.pose_only_playback),
         "pose_linear_only_playback": bool(args.pose_linear_only_playback),
-        "playback_output_name": playback_output_name if args.tas_automation_playback else args.playback_output_name or "",
+        "playback_output_name": playback_output_name if (args.tas_automation_playback or args.reference_map_resource) else args.playback_output_name or "",
         "playback_start_delay_ms": args.playback_start_delay_ms,
         "tas_automation_playback": bool(args.tas_automation_playback),
         "one_tick_diagnostic": one_tick_config is not None,
         "one_tick_config": one_tick_config or {},
         "server_commands_after": [
             {"delay_s": delay, "command": command}
-            for delay, command in server_commands_after
+            for delay, command in scheduled_commands
         ],
     }
     meta_path = args.output.with_suffix(args.output.suffix + ".meta.json")
@@ -1607,6 +1759,7 @@ def main() -> int:
         static_skid_diagnostics=args.static_skid_diagnostics,
         capture_from_first_gas=args.capture_from_first_gas,
         one_tick_config=one_tick_config,
+        skip_frida_bootstrap=args.prepare_gta_import,
     )
     if args.orchestrator and not (args.cpp_hook or args.timing_only):
         if not args.orchestrator.exists():
@@ -1675,6 +1828,7 @@ def main() -> int:
         try:
             restore_vorbis()
         finally:
+            restore_actual_race()
             restore_tas_folder()
             restore_pose_linear_only()
             restore_pose_only()

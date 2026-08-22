@@ -46,6 +46,13 @@ def test_one_tick_resource_prep_handles_crlf_and_delay(tmp_path):
     assert (resource / "client.lua").read_bytes().decode() == client
 
 
+def test_loader_mode_disables_mixed_frida_bootstrap():
+    tool = _load_tool()
+    script = tool._native_script(Path("C:/mta"), "loader", skip_frida_bootstrap=True)
+    assert "if (!true)" in script
+    assert "if (!skip_frida_bootstrap)" not in script
+
+
 def test_one_tick_wheel_state_offset_is_after_gas_audio_field():
     source = TOOL.read_text(encoding="utf-8")
     assert "writeU32Array(0x968, internal.wheelStates)" in source
@@ -77,6 +84,39 @@ def test_cpp_collision_stream_flushes_partial_batches():
     assert 'MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY' in source
     assert 'os.environ["MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY"] = "1"' in source
     assert '"cpp_collision_flush_every"' in source
+
+
+def test_actual_race_capture_removes_synthetic_map_and_polls_race_vehicle(tmp_path):
+    tool = _load_tool()
+    resource = (
+        tmp_path / "server" / "mods" / "deathmatch" / "resources" / "native_capture"
+    )
+    resource.mkdir(parents=True)
+    original_meta = (
+        '<meta>\r\n'
+        '  <map src="Etnies.map" dimension="0" />\r\n'
+        '  <script src="server.lua" type="server" />\r\n'
+        '  <script src="client.lua" type="client" />\r\n'
+        '</meta>\r\n'
+    ).encode()
+    original_server = b'local original = true\r\n'
+    (resource / "meta.xml").write_bytes(original_meta)
+    (resource / "server.lua").write_bytes(original_server)
+
+    restore = tool._prepare_actual_race_capture(tmp_path, "etnies-native", "race-tags")
+    meta = (resource / "meta.xml").read_bytes().decode()
+    server = (resource / "server.lua").read_bytes().decode()
+    assert "Etnies.map" not in meta
+    assert 'src="client.lua"' not in meta
+    assert 'getPedOccupiedVehicle(player)' in server
+    assert 'getElementModel(vehicle) ~= 411' in server
+    assert '"race-tags"' in server
+    assert '"tas:automationStart"' in server
+    assert "\r\n" in server
+
+    restore()
+    assert (resource / "meta.xml").read_bytes() == original_meta
+    assert (resource / "server.lua").read_bytes() == original_server
 
 
 def test_tas_automation_playback_replaces_native_event_and_restores(tmp_path):
