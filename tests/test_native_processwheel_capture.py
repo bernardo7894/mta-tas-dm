@@ -220,6 +220,8 @@ def test_reduced_stage_probe_keeps_collision_check_and_matrix_boundaries():
     assert "matrix:control.matrix" in script
     assert "collisionCheck:control.collisionCheck" in script
     assert "nativeStageCollisionKey" in script
+    assert "nativeStageProcessCollisionKey" in script
+    assert "processCollisionBoundaries:control.processCollisionBoundaries" in script
 
 
 def test_actual_race_capture_removes_synthetic_map_and_polls_race_vehicle(tmp_path):

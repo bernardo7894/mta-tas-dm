@@ -467,6 +467,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                             applyForces:[],
                             applyTurnForces:[],
                             collisionAlternates:[],
+                            processCollisionBoundaries:[],
                             activeRows:[],
                         }});
                         pendingCollisions.delete(key);
@@ -518,6 +519,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                             controlExit:exit,
                             entityCollisionProcess:control.entityCollisionProcess,
                             collisionCheck:control.collisionCheck,
+                            processCollisionBoundaries:control.processCollisionBoundaries,
                             suspensionProcess:control.suspensionProcess,
                         }});
                         if (batch.length >= 4) flush();
@@ -845,6 +847,71 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                     }};
                 }} catch (_) {{}}
                 this.nativeStageCollisionKey = null;
+            }}
+        }});
+        }}
+        // ProcessCollision is the narrow post-ProcessControl boundary where
+        // GTA applies the accumulated move/turn speed before collision tests.
+        // The reduced stage route observes it without installing force or
+        // ProcessWheel hooks, so reference-frame integration can be separated
+        // from the ProcessControl exit state.
+        if (SUSPENSION_STAGE_ONLY) {{
+        Interceptor.attach(processCollision, {{
+            onEnter() {{
+                if (CAPTURE_FROM_FIRST_GAS && !captureActive) return;
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativeStageProcessCollisionKey = vehicle.toString();
+                    this.nativeStageProcessCollisionVehicle = vehicle;
+                    this.nativeStageProcessCollisionBefore = physicalSnapshot(vehicle);
+                    this.nativeStageProcessCollisionBefore.matrix = matrixSnapshot(vehicle);
+                    const tag = readNativeSourceTag();
+                    this.nativeStageProcessCollisionTagEntry = tag.frame;
+                    this.nativeStageProcessCollisionTickEntry = tag.tick;
+                }} catch (_) {{}}
+            }},
+            onLeave() {{
+                const key = this.nativeStageProcessCollisionKey;
+                if (!key) return;
+                try {{
+                    const control = controlStates.get(key);
+                    if (control) {{
+                        const after = physicalSnapshot(this.nativeStageProcessCollisionVehicle);
+                        after.matrix = matrixSnapshot(this.nativeStageProcessCollisionVehicle);
+                        const tag = readNativeSourceTag();
+                        const boundary = {{
+                            sourceFrameTagEntry:this.nativeStageProcessCollisionTagEntry,
+                            sourceTickMsTagEntry:this.nativeStageProcessCollisionTickEntry,
+                            sourceFrameTagExit:tag.frame,
+                            sourceTickMsTagExit:tag.tick,
+                            before:this.nativeStageProcessCollisionBefore,
+                            after:after,
+                        }};
+                        control.processCollisionBoundaries.push(boundary);
+                        // ProcessCollision runs after ProcessControl has
+                        // already emitted its stage row. Publish a separate
+                        // boundary record rather than pretending it is part
+                        // of the earlier ProcessControl exit.
+                        if (captureActive) {{
+                            batch.push({{
+                                source:'gta-native-process-collision-boundary', label:OUTPUT_LABEL,
+                                processOrdinal:frame,
+                                sourceFrameTagEntry:boundary.sourceFrameTagEntry,
+                                sourceTickMsTagEntry:boundary.sourceTickMsTagEntry,
+                                sourceFrameTagExit:boundary.sourceFrameTagExit,
+                                sourceTickMsTagExit:boundary.sourceTickMsTagExit,
+                                gameFrame:gameFrameCounter.readU32(),
+                                gameTimeMs:gameTimeMs.readU32(),
+                                vehicle:key,
+                                timerStep:f(timerStep),
+                                processCollision:boundary,
+                            }});
+                            if (batch.length >= 4) flush();
+                        }}
+                    }}
+                }} catch (_) {{}}
+                this.nativeStageProcessCollisionKey = null;
             }}
         }});
         }}
@@ -2136,8 +2203,9 @@ def main() -> int:
         "capture_level": "collision-stage" if args.suspension_stage_only else "wheel",
         "install_wheel_hook": not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
         "direct_observable": (
-            "CAutomobile ProcessControlCollisionCheck/ProcessEntityCollision/ProcessSuspension "
-            "stage snapshots and ProcessControl matrices"
+            "CAutomobile ProcessControlCollisionCheck/ProcessCollision/"
+            "ProcessEntityCollision/ProcessSuspension stage snapshots and "
+            "ProcessControl matrices"
             if args.suspension_stage_only
             else "CVehicle::ProcessWheel entry arguments and vehicle state"
         ),

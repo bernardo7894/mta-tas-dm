@@ -309,7 +309,14 @@ attaches the observer to its new `gta_sa.exe` child only after server `JOIN`,
 which avoids perturbing the launcher's L3 startup. The C++ ProcessWheel hook
 is already active in inherited `multiplayer_sa_d.dll` before that late attach;
 `--cpp-stage-only` instead leaves that hook disabled while retaining the direct
-boundary observers.
+boundary observers. The Frida `--suspension-stage-only --collision-diagnostics`
+route also has a narrow ProcessCollision entry/exit probe; it publishes
+separate `gta-native-process-collision-boundary` rows because ProcessCollision
+runs after the ProcessControl stage row. In a timing-accepted launch window,
+its post-call matrix matches the controls-only Lua live matrix at the next
+source frame, while serialized TAS position remains a separate reference
+field. This boundary diagnostic must not be joined by pose or folded into
+continuous trajectory evidence.
 `--cpp-processcontrol-boundary` enables the matching direct
 `CAutomobile::ProcessControl` entry/exit stream (`.control.bin`), and
 `--cpp-processcontrol-source-window START END` limits it to a source-tagged
