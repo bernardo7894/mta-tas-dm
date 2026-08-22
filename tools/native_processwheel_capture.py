@@ -74,8 +74,10 @@ const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":")
 let bootstrapDone = false;
 
 Process.setExceptionHandler(function(details) {{
-    if (details.type === 'system' || details.type === 'breakpoint' || details.type === 'single-step')
+    if (details.type === 'system' || details.type === 'breakpoint' || details.type === 'single-step') {{
+        send({{type:'native_exception', exceptionType:details.type, address:String(details.address), pc:String(details.context.pc)}});
         return true;
+    }}
     send({{type:'native_exception', exceptionType:details.type, address:String(details.address), pc:String(details.context.pc)}});
     return false;
 }});
@@ -125,10 +127,59 @@ function callBootstrap() {{
     const setGtaCore = GetProcAddress(core, Memory.allocUtf8String('SetGTADirectory'));
     if (!setMtaCore.isNull()) new NativeFunction(setMtaCore, 'void', ['pointer','size_t'])(Memory.allocUtf16String(BIN_DIR), BIN_DIR.length);
     if (!setGtaCore.isNull()) new NativeFunction(setGtaCore, 'void', ['pointer','size_t'])(Memory.allocUtf16String(BIN_DIR), BIN_DIR.length);
+    // A Frida-spawned GTA process has frida-helper32.exe as its parent.  The
+    // unmodified core derives its MTA root from that parent before consulting
+    // the prepared registry value.  Block only OpenProcess calls originating
+    // from core_d.dll so the source path-resolution behavior falls back to the
+    // deliberately prepared local registry entry; do not globally alter GTA.
+    try {{
+        let coreOpenProcessBlocked = false;
+        for (const moduleName of ['kernel32.dll', 'kernelbase.dll']) {{
+            const module = Process.findModuleByName(moduleName);
+            const address = module && module.findExportByName('OpenProcess');
+            if (!address) continue;
+            Interceptor.attach(address, {{
+                onEnter() {{
+                    const caller = this.returnAddress;
+                    this.blockCoreCall = !coreOpenProcessBlocked
+                        && caller.compare(core.base) >= 0
+                        && caller.compare(core.base.add(core.size)) < 0;
+                }},
+                onLeave(retval) {{
+                    if (this.blockCoreCall) {{
+                        coreOpenProcessBlocked = true;
+                        retval.replace(ptr(0));
+                    }}
+                }},
+            }});
+        }}
+    }} catch (_) {{}}
+    // Debug CCore construction can expose an uninitialized m_pXML field at
+    // CreateXML.  Guard only the known constructor path: a nonzero value that
+    // is not a loaded module is heap garbage, not a valid XML interface.
+    try {{
+        const matches = Memory.scanSync(
+            core.base, core.size,
+            '55 8B EC 56 8B F1 8B 46 04 85 C0 75'
+        );
+        if (matches.length) {{
+            Interceptor.attach(matches[0].address, {{
+                onEnter() {{
+                    const object = this.context.ecx;
+                    const value = object.add(4).readU32();
+                    if (value !== 0 && !Process.findModuleByAddress(ptr(value)))
+                        object.add(4).writeU32(0);
+                }},
+            }});
+        }}
+    }} catch (_) {{}}
     const init = GetProcAddress(core, Memory.allocUtf8String('InitializeCore'));
     if (init.isNull()) throw new Error('InitializeCore export missing');
+    send({{type:'native_bootstrap_stage', stage:'libraries-loaded'}});
     send({{type:'native_bootstrap', core:String(core), netc:String(netc)}});
-    new NativeFunction(init, 'int32', [])();
+    send({{type:'native_bootstrap_stage', stage:'before-InitializeCore'}});
+    const initResult = new NativeFunction(init, 'int32', [])();
+    send({{type:'native_bootstrap_stage', stage:'after-InitializeCore', result:initResult}});
 }}
 
 // GTA calls this on its main thread during startup.  Keeping bootstrap here,
@@ -1324,6 +1375,11 @@ def _prepare_real_vorbis(mta_bin: Path) -> Any:
 def _start_server(
     path: Path, commands: list[str]
 ) -> tuple[subprocess.Popen[str], threading.Thread, threading.Event]:
+    log_path = path.parent / "mods" / "deathmatch" / "logs" / "server.log"
+    try:
+        log_offset = log_path.stat().st_size
+    except OSError:
+        log_offset = 0
     process = subprocess.Popen(
         [str(path)], cwd=str(path.parent), stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -1341,6 +1397,23 @@ def _start_server(
 
     thread = threading.Thread(target=drain, daemon=True)
     thread.start()
+
+    def watch_server_log() -> None:
+        offset = log_offset
+        while process.poll() is None and not joined.is_set():
+            try:
+                with log_path.open("r", encoding="utf-8", errors="replace") as stream:
+                    stream.seek(offset)
+                    chunk = stream.read()
+                    offset = stream.tell()
+                if "JOIN:" in chunk:
+                    joined.set()
+                    return
+            except OSError:
+                pass
+            time.sleep(0.25)
+
+    threading.Thread(target=watch_server_log, daemon=True).start()
     # The debug server's stdout is not consistently flushed through the
     # redirected pipe on Windows.  Keep a bounded startup delay rather than
     # depending on that diagnostic stream for synchronization.
@@ -1356,6 +1429,14 @@ def _start_server(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gta-exe", type=Path, default=Path(os.environ.get("MTA_GTA_EXE", "gta_sa.exe")))
+    parser.add_argument(
+        "--launcher-exe",
+        type=Path,
+        help=(
+            "launch this normal Multi Theft Auto client and attach to its new GTA child; "
+            "useful when direct Frida spawning stalls before the first game tick"
+        ),
+    )
     parser.add_argument("--mta-bin", type=Path, default=Path(os.environ.get("MTA_BIN", ".")))
     parser.add_argument(
         "--prepare-gta-import",
@@ -1363,6 +1444,11 @@ def main() -> int:
         help="temporarily rename GTA's WINMM.dll import to mtasa.dll for direct loader-proxy spawning",
     )
     parser.add_argument("--server-exe", type=Path)
+    parser.add_argument(
+        "--connect-uri",
+        default="mtasa://127.0.0.1:22003",
+        help="MTA connection URI passed as the GTA command-line argument",
+    )
     parser.add_argument("--start-resource", action="append", default=[])
     parser.add_argument(
         "--reference-map-resource",
@@ -1538,10 +1624,14 @@ def main() -> int:
         parser.error("--static-skid-diagnostics requires the Frida ProcessWheel route")
     if args.cpp_static_skid_diagnostics and not args.cpp_hook:
         parser.error("--cpp-static-skid-diagnostics requires --cpp-hook")
+    if args.launcher_exe and args.prepare_gta_import:
+        parser.error("--launcher-exe uses the normal launcher and cannot use --prepare-gta-import")
     if args.playback_output_name and not args.playback_output_name.replace("-", "").replace("_", "").isalnum():
         parser.error("--playback-output-name may contain only letters, numbers, '-' and '_'")
     if not args.reference_record_name.replace("-", "").replace("_", "").isalnum():
         parser.error("--reference-record-name may contain only letters, numbers, '-' and '_'")
+    if any(character in args.connect_uri for character in "\r\n"):
+        parser.error("--connect-uri must be a single command-line argument")
     if args.reference_map_resource and (not args.server_exe or args.tas_automation_playback):
         parser.error("--reference-map-resource requires --server-exe and cannot use --tas-automation-playback")
     if args.reference_map_resource and not args.prepare_tas_folder:
@@ -1589,6 +1679,9 @@ def main() -> int:
     previous_collision_flush_every = os.environ.get(
         "MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY"
     )
+    previous_mta_bin = os.environ.get("MTA_BIN")
+    previous_capture_diagnostics = os.environ.get("MTA_NATIVE_CAPTURE_DIAGNOSTICS")
+    os.environ["MTA_NATIVE_CAPTURE_DIAGNOSTICS"] = "1"
     if args.cpp_hook or args.timing_only:
         timing_output.parent.mkdir(parents=True, exist_ok=True)
         if timing_output.exists():
@@ -1612,7 +1705,18 @@ def main() -> int:
             # each row so a short valid run cannot be mistaken for a zero-row
             # capture merely because its final partial batch was never flushed.
             os.environ["MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY"] = "1"
-    os.environ["MTA_BIN"] = str(mta_bin)
+    if args.launcher_exe:
+        # The normal launcher already supplies the parent-process installation
+        # root.  Do not force the direct-spawn path resolver onto its child.
+        os.environ.pop("MTA_BIN", None)
+    else:
+        os.environ["MTA_BIN"] = str(mta_bin)
+    if not args.launcher_exe:
+        # Direct Frida/loader launches do not reliably reach the normal URI
+        # command path; the debug client has an explicitly gated fallback.
+        os.environ["MTA_NATIVE_CAPTURE_AUTOCONNECT"] = "1"
+    else:
+        os.environ.pop("MTA_NATIVE_CAPTURE_AUTOCONNECT", None)
     playback_output_name = args.playback_output_name or "native-etnies"
     restore_registry = _prepare_registry(mta_bin) if args.prepare_registry else (lambda: None)
     restore_tas_folder = _prepare_public_tas_folder(mta_bin) if args.prepare_tas_folder else (lambda: None)
@@ -1711,14 +1815,62 @@ def main() -> int:
 
     device = frida.get_local_device()
     gta = args.gta_exe.resolve()
+    launcher = args.launcher_exe.resolve() if args.launcher_exe else None
     restore_gta_import = (
         _prepare_gta_import(gta) if args.prepare_gta_import else (lambda: None)
     )
+    launcher_process: subprocess.Popen[Any] | None = None
+    pid: int | None = None
+    spawned_suspended = False
     try:
-        pid = device.spawn(str(gta), argv=[str(gta)], cwd=str(gta.parent))
-        session = device.attach(pid)
+        if launcher is not None:
+            if not launcher.exists():
+                raise FileNotFoundError(f"launcher executable not found: {launcher}")
+            existing_gta_pids = {
+                int(process.pid)
+                for process in device.enumerate_processes()
+                if process.name.lower().rstrip(".exe") in {"gta_sa", "gta-sa"}
+            }
+            launcher_process = subprocess.Popen(
+                [str(launcher), args.connect_uri],
+                cwd=str(launcher.parent),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            # Let the normal launcher/GTA pair finish its L3 startup and
+            # establish the network session before Frida attaches.  C++ hooks
+            # are already installed by multiplayer_sa_d.dll and do not require
+            # this late observer attachment.
+            if server_joined is not None:
+                join_deadline = time.monotonic() + max(90.0, float(args.duration))
+                while not server_joined.wait(0.25):
+                    if time.monotonic() >= join_deadline:
+                        raise RuntimeError("normal MTA launcher did not reach server JOIN")
+            deadline = time.monotonic() + max(30.0, float(args.duration))
+            while time.monotonic() < deadline:
+                candidates = [
+                    process for process in device.enumerate_processes()
+                    if process.name.lower().rstrip(".exe") in {"gta_sa", "gta-sa"}
+                    and int(process.pid) not in existing_gta_pids
+                ]
+                if candidates:
+                    pid = int(candidates[0].pid)
+                    break
+                time.sleep(0.25)
+            if pid is None:
+                raise RuntimeError("normal MTA launcher did not create a new gta_sa.exe")
+            session = device.attach(pid)
+        else:
+            spawned_suspended = True
+            pid = int(device.spawn(
+                str(gta), argv=[str(gta), args.connect_uri], cwd=str(gta.parent)
+            ))
+            session = device.attach(pid)
     except Exception:
         restore_gta_import()
+        if launcher_process is not None and launcher_process.poll() is None:
+            launcher_process.terminate()
         raise
     args.output.parent.mkdir(parents=True, exist_ok=True)
     metadata = {
@@ -1726,11 +1878,13 @@ def main() -> int:
         "format_version": 1,
         "label": args.label,
         "gta_executable": str(gta),
+        "launcher_executable": str(launcher) if launcher else "",
         "mta_bin": str(args.mta_bin.resolve()),
         "prepare_gta_import": bool(args.prepare_gta_import),
-        "frida_bootstrap": not bool(args.prepare_gta_import),
+        "frida_bootstrap": not bool(args.prepare_gta_import or launcher),
         "reference_map_resource": args.reference_map_resource or "",
         "reference_record_name": args.reference_record_name,
+        "connect_uri": args.connect_uri,
         "actual_race_capture": bool(args.reference_map_resource),
         "process_wheel_va": hex(IMAGE_BASE + PROCESS_WHEEL_RVA),
         "process_wheel_rva": hex(PROCESS_WHEEL_RVA),
@@ -1804,7 +1958,10 @@ def main() -> int:
             with args.output.open("a", encoding="utf-8") as stream:
                 for row in payload.get("records", []):
                     stream.write(json.dumps(row, separators=(",", ":")) + "\n")
-        elif kind in {"native_bootstrap", "native_bootstrap_error", "native_hook_error", "native_exception"}:
+        elif kind in {
+            "native_bootstrap", "native_bootstrap_stage", "native_bootstrap_error",
+            "native_hook_error", "native_exception", "info", "warn", "error",
+        }:
             print(f"[frida] {payload}")
         elif kind == "native_counts":
             print(f"[native] process={payload.get('processCalls')} wheel={payload.get('wheelCalls')} frame={payload.get('frame')}")
@@ -1822,7 +1979,7 @@ def main() -> int:
         static_skid_diagnostics=args.static_skid_diagnostics,
         capture_from_first_gas=args.capture_from_first_gas,
         one_tick_config=one_tick_config,
-        skip_frida_bootstrap=args.prepare_gta_import,
+        skip_frida_bootstrap=bool(args.prepare_gta_import or launcher),
     )
     if args.orchestrator and not (args.cpp_hook or args.timing_only):
         if not args.orchestrator.exists():
@@ -1864,7 +2021,9 @@ def main() -> int:
     script = session.create_script(native_script)
     script.on("message", on_message)
     script.load()
-    device.resume(pid)
+    if spawned_suspended:
+        assert pid is not None
+        device.resume(pid)
 
     def restore_with_retry(action: Any) -> None:
         last_error: OSError | None = None
@@ -1906,14 +2065,24 @@ def main() -> int:
             reference_race_thread.join(timeout=1.0)
         # Kill first: a Frida session with a busy callback queue can block
         # indefinitely while detaching from the debug client.
-        try:
-            device.kill(pid)
-        except Exception:
-            pass
+        if pid is not None:
+            try:
+                device.kill(pid)
+            except Exception:
+                pass
         try:
             session.detach()
         except Exception:
             pass
+        if launcher_process is not None and launcher_process.poll() is None:
+            try:
+                launcher_process.terminate()
+                launcher_process.wait(timeout=10)
+            except Exception:
+                try:
+                    launcher_process.kill()
+                except Exception:
+                    pass
         # Frida's kill/detach can return before Windows closes the image
         # mappings.  Wait before restoring executable/DLL bytes.
         try:
@@ -1956,6 +2125,15 @@ def main() -> int:
                     os.environ.pop("MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY", None)
                 else:
                     os.environ["MTA_NATIVE_COLLISION_ALT_CPP_FLUSH_EVERY"] = previous_collision_flush_every
+            os.environ.pop("MTA_NATIVE_CAPTURE_AUTOCONNECT", None)
+            if previous_mta_bin is None:
+                os.environ.pop("MTA_BIN", None)
+            else:
+                os.environ["MTA_BIN"] = previous_mta_bin
+            if previous_capture_diagnostics is None:
+                os.environ.pop("MTA_NATIVE_CAPTURE_DIAGNOSTICS", None)
+            else:
+                os.environ["MTA_NATIVE_CAPTURE_DIAGNOSTICS"] = previous_capture_diagnostics
     print(f"native capture written to {args.output}")
     return 0
 

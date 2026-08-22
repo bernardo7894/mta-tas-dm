@@ -74,6 +74,21 @@ def test_actual_race_duration_guard_preserves_full_playback():
     assert "requires --duration" in source
 
 
+def test_client_receives_connection_uri_without_debug_core_autoconnect():
+    source = TOOL.read_text(encoding="utf-8")
+    assert 'default="mtasa://127.0.0.1:22003"' in source
+    assert 'argv=[str(gta), args.connect_uri]' in source
+    assert '"connect_uri": args.connect_uri' in source
+
+
+def test_normal_launcher_child_attach_mode_is_separate_from_direct_bootstrap():
+    source = TOOL.read_text(encoding="utf-8")
+    assert '"--launcher-exe"' in source
+    assert 'normal MTA launcher did not create a new gta_sa.exe' in source
+    assert 'skip_frida_bootstrap=bool(args.prepare_gta_import or launcher)' in source
+    assert 'launcher_process.terminate()' in source
+
+
 def test_actual_race_map_start_waits_for_client_join():
     source = TOOL.read_text(encoding="utf-8")
     assert "server_joined.wait(0.25)" in source
