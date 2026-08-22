@@ -175,6 +175,25 @@ def test_suspension_stage_only_omits_wheel_hook_but_keeps_stage_hooks():
     assert script.index("source:'gta-native-process-stage'") < script.index("if (INSTALL_NATIVE_WHEEL_HOOK) {")
 
 
+def test_stage_capture_includes_transmission_history_boundary():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "stage",
+        install_wheel_hook=False,
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+    )
+    assert "const transmissionSnapshot" in script
+    assert "inertiaValue1:f(vehicle.add(0x808))" in script
+    assert "inertiaValue2:f(vehicle.add(0x80C))" in script
+    assert "transmission:control.transmission" in script
+    assert "transmission:transmissionSnapshot(vehicle)" in script
+    assert "calculateDriveAcceleration" in script
+    assert "transmissionCalls:control.transmissionCalls" in script
+    assert "inertiaValue2After" in script
+
+
 def test_collision_diagnostics_capture_fresh_automobile_col_points():
     source = TOOL.read_text(encoding="utf-8")
     assert "main.base.add(0x81BFF8)" in source

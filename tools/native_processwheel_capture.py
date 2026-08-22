@@ -210,6 +210,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
     const applyTurnForce = main.base.add(0x142A50);
     const applyCollisionAlt = main.base.add(0x144D50);
     const processFriction = main.base.add(0x1483D0);
+    const calculateDriveAcceleration = main.base.add(0x2D05E0);
     const applyFrictionForce = main.base.add(0x143220);
     const gameFrameCounter = main.base.add(0x77CB4C);
     const timerOldStep = main.base.add(0x77CB54);
@@ -223,6 +224,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
     const maxPreCaptureRecords = 512;
     let oneTickInjected = false;
     const controlStates = new Map();
+    let activeControlKey = null;
     const pendingCollisions = new Map();
     const f = p => {{ try {{ return p.readFloat(); }} catch(_) {{ return null; }} }};
     const u8 = p => {{ try {{ return p.readU8(); }} catch(_) {{ return null; }} }};
@@ -284,6 +286,13 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
             }};
         }} catch(_) {{ return null; }}
     }};
+    const transmissionSnapshot = vehicle => ({{
+        currentGear:u8(vehicle.add(0x4B4)),
+        gearChangeCount:f(vehicle.add(0x4B8)),
+        inertiaValue1:f(vehicle.add(0x808)),
+        inertiaValue2:f(vehicle.add(0x80C)),
+        timerStep:f(timerStep),
+    }});
     const matrixSnapshot = vehicle => {{
         try {{
             const q = vehicle.add(0x14).readPointer();
@@ -304,6 +313,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
         collisionImpactVelocity:vec(vehicle.add(0xE0)),
         damageImpulse:f(vehicle.add(0xD8)),
         collidedEntity:(()=>{{try{{return vehicle.add(0xDC).readPointer().toString()}}catch(_){{return null}}}})(),
+        transmission:transmissionSnapshot(vehicle),
     }});
     const snapshotChanged = (before, after) => {{
         if (!before || !after) return false;
@@ -455,6 +465,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                             wheelStateMemory:u32Array4(vehicle.add(0x968)),
                             audioChangingGear:((u8(vehicle.add(0x42B)) || 0) & 0x20) !== 0,
                             handling:handlingSnapshot(vehicle),
+                            transmission:transmissionSnapshot(vehicle),
                             collisionProcess:pendingCollisions.get(key) || null,
                             entityCollisionProcess:null,
                             gasPedalBefore:f(vehicle.add(0x49C)),
@@ -469,8 +480,11 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                             collisionAlternates:[],
                             processCollisionBoundaries:[],
                             activeRows:[],
+                            transmissionCalls:[],
+                            vehicle:vehicle,
                         }});
                         pendingCollisions.delete(key);
+                        activeControlKey = key;
                         this.nativeControlKey = key;
                         this.nativeControlVehicle = vehicle;
                     }}
@@ -515,6 +529,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                                 brakePedalAfter:f(stageVehicle.add(0x4A0)),
                                 suspensionAtProcessControlEntry:control.suspensionAtProcessControlEntry,
                                 matrix:control.matrix,
+                                transmission:control.transmission,
+                                transmissionCalls:control.transmissionCalls,
                             }},
                             controlExit:exit,
                             entityCollisionProcess:control.entityCollisionProcess,
@@ -524,6 +540,62 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                         }});
                         if (batch.length >= 4) flush();
                     }}
+                }} catch(_) {{}}
+                if (activeControlKey === key) activeControlKey = null;
+            }},
+        }});
+        Interceptor.attach(calculateDriveAcceleration, {{
+            onEnter() {{
+                const key = activeControlKey;
+                const control = key ? controlStates.get(key) : null;
+                const vehicle = control && control.vehicle;
+                if (!control || !vehicle) return;
+                try {{
+                    this.transmissionControl = control;
+                    this.transmissionVehicle = vehicle;
+                    this.transmissionBefore = {{
+                        gameFrame:gameFrameCounter.readU32(),
+                        gameTimeMs:gameTimeMs.readU32(),
+                        sourceTag:readNativeSourceTag(),
+                        timerStep:f(timerStep),
+                        gasPedal:f(vehicle.add(0x49C)),
+                        velocity:vec(vehicle.add(0x44)),
+                        currentGear:u8(vehicle.add(0x4B4)),
+                        gearChangeCount:f(vehicle.add(0x4B8)),
+                        inertiaValue1:f(vehicle.add(0x808)),
+                        inertiaValue2:f(vehicle.add(0x80C)),
+                    }};
+                }} catch(_) {{
+                    this.transmissionControl = null;
+                }}
+            }},
+            onLeave(returnValue) {{
+                const control = this.transmissionControl;
+                const vehicle = this.transmissionVehicle;
+                const before = this.transmissionBefore;
+                if (!control || !vehicle || !before) return;
+                try {{
+                    const tag = readNativeSourceTag();
+                    control.transmissionCalls.push({{
+                        gameFrame:before.gameFrame,
+                        gameTimeMs:before.gameTimeMs,
+                        sourceFrameTagEntry:before.sourceTag.frame,
+                        sourceTickMsTagEntry:before.sourceTag.tick,
+                        sourceFrameTagExit:tag.frame,
+                        sourceTickMsTagExit:tag.tick,
+                        timerStep:before.timerStep,
+                        gasPedal:before.gasPedal,
+                        velocityBefore:before.velocity,
+                        currentGearBefore:before.currentGear,
+                        gearChangeCountBefore:before.gearChangeCount,
+                        inertiaValue1Before:before.inertiaValue1,
+                        inertiaValue2Before:before.inertiaValue2,
+                        returnValue:f(returnValue),
+                        currentGearAfter:u8(vehicle.add(0x4B4)),
+                        gearChangeCountAfter:f(vehicle.add(0x4B8)),
+                        inertiaValue1After:f(vehicle.add(0x808)),
+                        inertiaValue2After:f(vehicle.add(0x80C)),
+                    }});
                 }} catch(_) {{}}
             }},
         }});
