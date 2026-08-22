@@ -46,6 +46,28 @@ def test_one_tick_resource_prep_handles_crlf_and_delay(tmp_path):
     assert (resource / "client.lua").read_bytes().decode() == client
 
 
+def test_one_tick_resource_prep_accepts_current_source_tag_trigger(tmp_path):
+    tool = _load_tool()
+    resource = tmp_path / "server" / "mods" / "deathmatch" / "resources" / "native_capture"
+    resource.mkdir(parents=True)
+    server = (
+        'local function startPlayer(player)\n'
+        '    triggerClientEvent(player, "nativeCapture:start", resourceRoot, "etnies-native", "source-tag-smoke")\n'
+        'end\n'
+    )
+    client = "addEvent(\"nativeCapture:oneTick\", true)\n"
+    (resource / "server.lua").write_text(server, encoding="utf-8")
+    (resource / "client.lua").write_text(client, encoding="utf-8")
+    restore = tool._prepare_one_tick_resource(
+        tmp_path, {"position": [1, 2, 3], "nativeInternal": {}, "oneTickDelayMs": 30000}
+    )
+    prepared = (resource / "server.lua").read_text(encoding="utf-8")
+    assert "nativeCapture:oneTick" in prepared
+    assert "end, 30000, 1)" in prepared
+    restore()
+    assert (resource / "server.lua").read_text(encoding="utf-8") == server
+
+
 def test_actual_race_duration_guard_preserves_full_playback():
     source = TOOL.read_text(encoding="utf-8")
     assert "17781.0 / 99.0" in source

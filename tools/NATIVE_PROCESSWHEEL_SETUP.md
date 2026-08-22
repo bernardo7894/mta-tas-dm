@@ -117,7 +117,10 @@ ordinary C++ rows use `0xFF` sentinels for those optional bytes. The separate
 `--one-tick-config <json>` mode bypasses TAS playback, writes one public
 state/control sample, and lets GTA execute naturally; optional `nativeInternal`
 values initialize directly known private state before the matching
-`ProcessControl` call. Native ProcessWheel compression is post-normalized;
+`ProcessControl` call. The server preparation matches the deployed
+`nativeCapture:start` trigger by event signature rather than a stale output-name
+literal, so source-tag-smoke and other trigger-only resource variants cannot
+silently skip the one-tick event. Native ProcessWheel compression is post-normalized;
 therefore `nativeInternal.suspensionCompressionInputConvention` must explicitly
 be `raw-line-fraction` or `normalized-post-process-control`. Raw-line input is
 normalized by GTA at the source `ProcessControl` boundary. The

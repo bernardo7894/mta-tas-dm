@@ -1205,26 +1205,30 @@ def _prepare_one_tick_resource(mta_bin: Path, config: dict[str, Any]) -> Any:
     encoded = _lua_literal(config)
     server = original_server.decode("utf-8")
     client = original_client.decode("utf-8")
-    marker = '    triggerClientEvent(player, "nativeCapture:start", resourceRoot, "etnies-native", "native-etnies")'
+    lines = server.splitlines(keepends=True)
+    matches = [
+        index for index, line in enumerate(lines)
+        if 'triggerClientEvent(player, "nativeCapture:start", resourceRoot,' in line
+    ]
+    if len(matches) != 1:
+        return lambda: None
     try:
         one_tick_delay_ms = max(0, int(config.get("oneTickDelayMs", 1000)))
     except (AttributeError, TypeError, ValueError):
         one_tick_delay_ms = 1000
-    newline = "\r\n" if "\r\n" in server else "\n"
-    marker = marker.replace("\n", newline)
+    index = matches[0]
+    line = lines[index]
+    line_ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+    indent = line[:len(line) - len(line.lstrip())]
     replacement = (
-        "    setTimer(function()\n"
-        "        if isElement(player) then\n"
-        "            triggerClientEvent(player, \"nativeCapture:oneTick\", resourceRoot, oneTickConfig)\n"
-        "        end\n"
-        f"    end, {one_tick_delay_ms}, 1)"
-    ).replace("\n", newline)
-    if server.count(marker) != 1:
-        return lambda: None
-    server = (
-        "local oneTickConfig = " + encoded + newline +
-        server.replace(marker, replacement, 1)
+        f"{indent}setTimer(function(){line_ending}"
+        f"{indent}    if isElement(player) then{line_ending}"
+        f"{indent}        triggerClientEvent(player, \"nativeCapture:oneTick\", resourceRoot, oneTickConfig){line_ending}"
+        f"{indent}    end{line_ending}"
+        f"{indent}end, {one_tick_delay_ms}, 1){line_ending}"
     )
+    lines[index] = replacement
+    server = "local oneTickConfig = " + encoded + line_ending + "".join(lines)
     client += r'''
 
 local oneTickPending = nil
