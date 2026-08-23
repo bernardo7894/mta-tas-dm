@@ -1408,6 +1408,30 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                                 clientEntity:entityPtr.toString(),
                                 angularVelocity:vec(turnVelocityPtr),
                                 returnAddress:this.returnAddress.toString(),
+                                callerModule:(()=>{{
+                                    try {{
+                                        const module = Process.findModuleByAddress(this.returnAddress);
+                                        return module ? {{
+                                            name:module.name,
+                                            base:module.base.toString(),
+                                            size:module.size,
+                                        }} : null;
+                                    }} catch (_) {{ return null; }}
+                                }})(),
+                                callerSymbol:(()=>{{
+                                    try {{ return DebugSymbol.fromAddress(this.returnAddress).toString(); }}
+                                    catch (_) {{ return null; }}
+                                }})(),
+                                callerBacktrace:(()=>{{
+                                    try {{
+                                        return Thread.backtrace(this.context, Backtracer.ACCURATE)
+                                            .slice(1, 9).map(address => {{
+                                                try {{ return DebugSymbol.fromAddress(address).toString(); }}
+                                                catch (_) {{ return address.toString(); }}
+                                            }});
+                                    }} catch (_) {{ return []; }}
+                                }})(),
+                                clientDllBase:clientDll.base.toString(),
                             }};
                         }} catch (_) {{}}
                     }},

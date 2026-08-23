@@ -253,6 +253,9 @@ def test_frida_angular_state_writer_diagnostic_is_bounded_and_read_only():
     assert "staticSetElementAngularVelocityRva = 0x7AE0B0" in script
     assert "source:'gta-native-set-element-angular-velocity'" in script
     assert "sourceTagWasPublished" in script
+    assert "callerModule" in script
+    assert "callerSymbol" in script
+    assert "callerBacktrace" in script
     assert "SetElementAngularVelocity signature mismatch" in script
     assert "turnVelocityPtr = this.context.esp.add(8).readPointer()" in script
 
