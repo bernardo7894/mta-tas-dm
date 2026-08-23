@@ -57,6 +57,7 @@ def _native_script(
     capture_from_first_gas: bool = False,
     one_tick_config: dict[str, Any] | None = None,
     skip_frida_bootstrap: bool = False,
+    processwheel_source_window: tuple[int, int] | None = None,
 ) -> str:
     bin_dir = _js_string(str(mta_bin))
     mta_dir = _js_string(str(mta_bin / "MTA"))
@@ -70,6 +71,7 @@ const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
 const SUSPENSION_STAGE_ONLY = {str(suspension_stage_only).lower()};
 const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
 const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
+const PROCESSWHEEL_SOURCE_WINDOW = {json.dumps(list(processwheel_source_window) if processwheel_source_window else None)};
 const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":"))};
 let bootstrapDone = false;
 
@@ -992,6 +994,12 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
             onEnter() {{
                 const vehicle = this.context.ecx;
                 try {{ if (vehicle.add(0x22).readU16() !== 411) return; }} catch(_) {{ return; }}
+                const sourceTag = readNativeSourceTag();
+                if (Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)) {{
+                    if (sourceTag.frame === null
+                        || sourceTag.frame < PROCESSWHEEL_SOURCE_WINDOW[0]
+                        || sourceTag.frame > PROCESSWHEEL_SOURCE_WINDOW[1]) return;
+                }}
                 const sp = this.context.esp;
                 const fwdPtr=sp.add(4).readPointer(), rightPtr=sp.add(8).readPointer();
                 const speedPtr=sp.add(12).readPointer(), pointPtr=sp.add(16).readPointer();
@@ -1001,8 +1009,10 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
                 this.nativeVehicle=vehicle; this.nativeState=wheelStatePtr;
                 this.nativeRecord={{
                     source:'gta-native-pre-ProcessWheel', label:OUTPUT_LABEL, frame,
+                    sourceFrameTag:sourceTag.frame, sourceTickMsTag:sourceTag.tick,
                     gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
                     gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
+                    timerStep:f(timerStep),
                     vehicle:vehicle.toString(), wheelId:s32(sp.add(36)), wheelsOnGround:s32(sp.add(20)),
                     thrust:f(sp.add(24)), brake:f(sp.add(28)), adhesion:f(sp.add(32)),
                     wheelStatus:(()=>{{try{{return sp.add(48).readU16()}}catch(_){{return null}}}})(),
@@ -1903,6 +1913,16 @@ def main() -> int:
         help="read GTA's private CVehicle::ProcessWheel bAlreadySkidding static (Frida only)",
     )
     parser.add_argument(
+        "--frida-processwheel-source-window",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        help=(
+            "limit Frida ProcessWheel rows to inclusive native source-frame tags; "
+            "diagnostic only and incompatible with C++/timing/stage routes"
+        ),
+    )
+    parser.add_argument(
         "--capture-from-first-gas",
         action="store_true",
         help="buffer native rows until the first nonzero gas/brake, avoiding warm-up IPC overhead",
@@ -1935,6 +1955,12 @@ def main() -> int:
         args.cpp_hook = True
         args.cpp_processcontrol_boundary = True
         args.cpp_processsuspension_boundary = True
+    if args.frida_processwheel_source_window:
+        start_frame, end_frame = args.frida_processwheel_source_window
+        if start_frame < 1 or end_frame < start_frame:
+            parser.error("invalid Frida ProcessWheel source window")
+        if args.cpp_hook or args.timing_only or args.suspension_stage_only:
+            parser.error("--frida-processwheel-source-window requires the Frida ProcessWheel route")
     if args.cpp_minimal or args.cpp_no_matrix:
         args.cpp_hook = True
     playback_modes = sum(
@@ -2301,6 +2327,10 @@ def main() -> int:
         "actual_race_capture": bool(args.reference_map_resource),
         "process_wheel_va": hex(IMAGE_BASE + PROCESS_WHEEL_RVA),
         "process_wheel_rva": hex(PROCESS_WHEEL_RVA),
+        "processwheel_source_window": (
+            list(args.frida_processwheel_source_window)
+            if args.frida_processwheel_source_window else None
+        ),
         "capture_level": "collision-stage" if args.suspension_stage_only else "wheel",
         "install_wheel_hook": not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
         "direct_observable": (
@@ -2432,6 +2462,10 @@ def main() -> int:
         capture_from_first_gas=args.capture_from_first_gas,
         one_tick_config=one_tick_config,
         skip_frida_bootstrap=bool(args.prepare_gta_import or launcher),
+        processwheel_source_window=(
+            tuple(args.frida_processwheel_source_window)
+            if args.frida_processwheel_source_window else None
+        ),
     )
     if args.orchestrator and not (args.cpp_hook or args.timing_only):
         if not args.orchestrator.exists():
@@ -2458,6 +2492,12 @@ def main() -> int:
             + ";\n"
             "const CAPTURE_FROM_FIRST_GAS = "
             + str(args.capture_from_first_gas).lower()
+            + ";\n"
+            "const PROCESSWHEEL_SOURCE_WINDOW = "
+            + json.dumps(
+                list(args.frida_processwheel_source_window)
+                if args.frida_processwheel_source_window else None
+            )
             + ";\n"
             "const ONE_TICK_CONFIG = "
             + json.dumps(one_tick_config or {}, separators=(",", ":"))

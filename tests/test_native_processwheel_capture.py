@@ -157,6 +157,20 @@ def test_source_tag_is_written_after_controls_are_applied():
     assert "after all controls" in source[tag - 400:tag]
 
 
+def test_frida_processwheel_source_window_limits_rows_without_disabling_hook():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "wheel-window",
+        processwheel_source_window=(24, 100),
+    )
+    assert "const PROCESSWHEEL_SOURCE_WINDOW = [24, 100];" in script
+    assert "sourceTag.frame < PROCESSWHEEL_SOURCE_WINDOW[0]" in script
+    assert "sourceFrameTag:sourceTag.frame" in script
+    assert "timerStep:f(timerStep)" in script
+    assert "if (INSTALL_NATIVE_WHEEL_HOOK)" in script
+
+
 def test_suspension_stage_only_omits_wheel_hook_but_keeps_stage_hooks():
     tool = _load_tool()
     script = tool._native_script(
