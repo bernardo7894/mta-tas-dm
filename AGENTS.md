@@ -356,8 +356,14 @@ paying full-run boundary-observer overhead. `--stage-force-diagnostics` is an
 opt-in Frida stage extension that adds read-only physical velocity snapshots
 around ProcessSuspension without enabling the expensive full ApplyForce hook;
 the separate full-force observer A/B is rejected when it creates timestep
-outliers. It remains diagnostic: the latest accepted window reached source tags
-25--88 only, so it is not complete controls-only trajectory evidence. `--cpp-stage-only` enables the ProcessControl
+outliers. `--stage-force-events --stage-force-source-window START END` adds a
+bounded, read-only ApplyForce event stream while ProcessSuspension is active;
+each row carries raw before/after linear/angular deltas and spring/damping
+return-address provenance. The first exact 20--30 event run accepted only 8/11
+tags because the extra hook caused timer outliers, so its accepted subset is
+diagnostic and the physical-only v3 boundary remains the retained evidence. It
+remains diagnostic: the latest accepted window reached source tags 25--88 only,
+so it is not complete controls-only trajectory evidence. `--cpp-stage-only` enables the ProcessControl
 and ProcessSuspension boundary streams without installing ProcessWheel; it is
 a lower-overhead causal diagnostic, still subject to the strict timer-step gate.
 Convert it with

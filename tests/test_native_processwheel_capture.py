@@ -376,9 +376,28 @@ def test_stage_force_diagnostics_publishes_suspension_physical_boundary():
     assert "const STAGE_FORCE_DIAGNOSTICS = true;" in script
     assert "physicalBefore:this.nativeSuspensionPhysicalBefore" in script
     assert "physicalAfter:STAGE_FORCE_DIAGNOSTICS" in script
-    assert "forceEvents:STAGE_FORCE_DIAGNOSTICS" in script
+    assert "forceEvents:(STAGE_FORCE_DIAGNOSTICS || STAGE_FORCE_EVENTS)" in script
     assert "applyForces:STAGE_FORCE_DIAGNOSTICS ? control.applyForces : null" in script
     assert "nativeForceDuringSuspension" in script
+
+
+def test_stage_force_events_are_bounded_and_capture_velocity_deltas():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "stage-force-events",
+        install_wheel_hook=False,
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+        stage_force_diagnostics=True,
+        stage_force_events=True,
+        stage_force_source_window=(20, 30),
+    )
+    assert "const STAGE_FORCE_EVENTS = true;" in script
+    assert "const STAGE_FORCE_SOURCE_WINDOW = [20, 30];" in script
+    assert "source:'gta-native-processsuspension-ApplyForce'" in script
+    assert "linearVelocityDelta:delta" in script
+    assert "activeSuspensionForceContext" in script
 
 
 def test_reduced_stage_probe_keeps_collision_check_and_matrix_boundaries():

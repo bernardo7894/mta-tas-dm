@@ -54,6 +54,8 @@ def _native_script(
     collision_diagnostics: bool = False,
     suspension_stage_only: bool = False,
     stage_force_diagnostics: bool = False,
+    stage_force_events: bool = False,
+    stage_force_source_window: tuple[int, int] | None = None,
     static_skid_diagnostics: bool = False,
     capture_from_first_gas: bool = False,
     one_tick_config: dict[str, Any] | None = None,
@@ -75,6 +77,8 @@ const INSTALL_NATIVE_WHEEL_HOOK = {str(install_wheel_hook).lower()};
 const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
 const SUSPENSION_STAGE_ONLY = {str(suspension_stage_only).lower()};
 const STAGE_FORCE_DIAGNOSTICS = {str(stage_force_diagnostics).lower()};
+const STAGE_FORCE_EVENTS = {str(stage_force_events).lower()};
+const STAGE_FORCE_SOURCE_WINDOW = {json.dumps(list(stage_force_source_window) if stage_force_source_window else None)};
 const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
 const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
 const PROCESSWHEEL_SOURCE_WINDOW = {json.dumps(list(processwheel_source_window) if processwheel_source_window else None)};
@@ -243,6 +247,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
     const controlStates = new Map();
     let activeControlKey = null;
     let activeSuspensionControlKey = null;
+    let activeSuspensionForceContext = null;
     const pendingCollisions = new Map();
     const f = p => {{ try {{ return p.readFloat(); }} catch(_) {{ return null; }} }};
     const u8 = p => {{ try {{ return p.readU8(); }} catch(_) {{ return null; }} }};
@@ -672,6 +677,18 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                     activeSuspensionControlKey = this.nativeSuspensionKey;
                     const activeControl = controlStates.get(this.nativeSuspensionKey);
                     if (activeControl) activeControl.suspensionForceEvents = [];
+                    const tag = readNativeSourceTag();
+                    const inForceWindow = STAGE_FORCE_EVENTS
+                        && Array.isArray(STAGE_FORCE_SOURCE_WINDOW)
+                        && tag.frame !== null
+                        && tag.frame >= STAGE_FORCE_SOURCE_WINDOW[0]
+                        && tag.frame <= STAGE_FORCE_SOURCE_WINDOW[1];
+                    activeSuspensionForceContext = inForceWindow
+                        ? {{ key:this.nativeSuspensionKey,
+                            sourceFrameTag:tag.frame,
+                            sourceTickMsTag:tag.tick,
+                            events:activeControl ? activeControl.suspensionForceEvents : [] }}
+                        : null;
                 }} catch(_) {{}}
             }},
             onLeave() {{
@@ -686,14 +703,62 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                         physicalBefore:this.nativeSuspensionPhysicalBefore,
                         physicalAfter:STAGE_FORCE_DIAGNOSTICS
                             ? physicalSnapshot(this.nativeSuspensionVehicle) : null,
-                        forceEvents:STAGE_FORCE_DIAGNOSTICS
+                        forceEvents:(STAGE_FORCE_DIAGNOSTICS || STAGE_FORCE_EVENTS)
                             ? (control.suspensionForceEvents || []) : null,
                     }};
                 }} catch(_) {{}}
+                if (activeSuspensionForceContext
+                    && activeSuspensionForceContext.key === this.nativeSuspensionKey)
+                    activeSuspensionForceContext = null;
                 if (activeSuspensionControlKey === this.nativeSuspensionKey)
                     activeSuspensionControlKey = null;
             }}
         }});
+        if (STAGE_FORCE_EVENTS) {{
+        Interceptor.attach(applyForce, {{
+            onEnter() {{
+                const context = activeSuspensionForceContext;
+                if (!context) return;
+                const vehicle = this.context.ecx;
+                if (context.key !== vehicle.toString()) return;
+                try {{
+                    this.nativeStageForceEventContext = context;
+                    this.nativeStageForceEventVehicle = vehicle;
+                    const sp = this.context.esp;
+                    this.nativeStageForceEventForce = [f(sp.add(4)), f(sp.add(8)), f(sp.add(12))];
+                    this.nativeStageForceEventPoint = [f(sp.add(16)), f(sp.add(20)), f(sp.add(24))];
+                    this.nativeStageForceEventBeforeLinear = vec(vehicle.add(0x44));
+                    this.nativeStageForceEventBeforeAngular = vec(vehicle.add(0x50));
+                    this.nativeStageForceEventReturnAddress = this.returnAddress.toString();
+                }} catch (_) {{
+                    this.nativeStageForceEventContext = null;
+                }}
+            }},
+            onLeave() {{
+                const context = this.nativeStageForceEventContext;
+                if (!context) return;
+                try {{
+                    const afterLinear = vec(this.nativeStageForceEventVehicle.add(0x44));
+                    const afterAngular = vec(this.nativeStageForceEventVehicle.add(0x50));
+                    context.events.push({{
+                        source:'gta-native-processsuspension-ApplyForce',
+                        sourceFrameTag:context.sourceFrameTag,
+                        sourceTickMsTag:context.sourceTickMsTag,
+                        force:this.nativeStageForceEventForce,
+                        point:this.nativeStageForceEventPoint,
+                        linearVelocityBefore:this.nativeStageForceEventBeforeLinear,
+                        linearVelocityAfter:afterLinear,
+                        angularVelocityBefore:this.nativeStageForceEventBeforeAngular,
+                        angularVelocityAfter:afterAngular,
+                        linearVelocityDelta:delta(afterLinear, this.nativeStageForceEventBeforeLinear),
+                        angularVelocityDelta:delta(afterAngular, this.nativeStageForceEventBeforeAngular),
+                        returnAddress:this.nativeStageForceEventReturnAddress,
+                    }});
+                }} catch (_) {{}}
+                this.nativeStageForceEventContext = null;
+            }},
+        }});
+        }}
         if (!SUSPENSION_STAGE_ONLY) {{
         Interceptor.attach(processFriction, {{
             onEnter() {{
@@ -2222,6 +2287,21 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--stage-force-events",
+        action="store_true",
+        help=(
+            "capture only the nested ProcessSuspension ApplyForce events with "
+            "raw before/after velocity deltas; requires a bounded source window"
+        ),
+    )
+    parser.add_argument(
+        "--stage-force-source-window",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        help="inclusive exact source-tag window for --stage-force-events",
+    )
+    parser.add_argument(
         "--playback-output-name",
         help="temporarily select this Lua physics-output name in the local native_capture resource",
     )
@@ -2331,6 +2411,18 @@ def main() -> int:
         parser.error("--suspension-stage-only requires Frida --collision-diagnostics")
     if args.stage_force_diagnostics and not args.suspension_stage_only:
         parser.error("--stage-force-diagnostics requires --suspension-stage-only")
+    if args.stage_force_events and not args.suspension_stage_only:
+        parser.error("--stage-force-events requires --suspension-stage-only")
+    if args.stage_force_events and not args.stage_force_diagnostics:
+        parser.error("--stage-force-events requires --stage-force-diagnostics")
+    if args.stage_force_events and not args.stage_force_source_window:
+        parser.error("--stage-force-events requires --stage-force-source-window")
+    if args.stage_force_source_window and not args.stage_force_events:
+        parser.error("--stage-force-source-window requires --stage-force-events")
+    if args.stage_force_source_window:
+        start_frame, end_frame = args.stage_force_source_window
+        if start_frame < 1 or end_frame < start_frame:
+            parser.error("invalid stage force source window")
     if args.cpp_stage_only and args.timing_only:
         parser.error("--cpp-stage-only cannot be combined with --timing-only")
     server_commands_after: list[tuple[float, str]] = []
@@ -2704,6 +2796,11 @@ def main() -> int:
         "collision_diagnostics": bool(args.collision_diagnostics),
         "suspension_stage_only": bool(args.suspension_stage_only),
         "stage_force_diagnostics": bool(args.stage_force_diagnostics),
+        "stage_force_events": bool(args.stage_force_events),
+        "stage_force_source_window": (
+            list(args.stage_force_source_window)
+            if args.stage_force_source_window else None
+        ),
         "static_skid_diagnostics": bool(args.static_skid_diagnostics or args.cpp_static_skid_diagnostics),
         "capture_from_first_gas": bool(args.capture_from_first_gas),
         "cpp_static_skid_diagnostics": bool(args.cpp_static_skid_diagnostics),
@@ -2780,6 +2877,11 @@ def main() -> int:
         collision_diagnostics=args.collision_diagnostics,
         suspension_stage_only=args.suspension_stage_only,
         stage_force_diagnostics=args.stage_force_diagnostics,
+        stage_force_events=args.stage_force_events,
+        stage_force_source_window=(
+            tuple(args.stage_force_source_window)
+            if args.stage_force_source_window else None
+        ),
         static_skid_diagnostics=args.static_skid_diagnostics,
         capture_from_first_gas=args.capture_from_first_gas,
         one_tick_config=one_tick_config,
@@ -2825,6 +2927,15 @@ def main() -> int:
             + ";\n"
             "const STAGE_FORCE_DIAGNOSTICS = "
             + str(args.stage_force_diagnostics).lower()
+            + ";\n"
+            "const STAGE_FORCE_EVENTS = "
+            + str(args.stage_force_events).lower()
+            + ";\n"
+            "const STAGE_FORCE_SOURCE_WINDOW = "
+            + json.dumps(
+                list(args.stage_force_source_window)
+                if args.stage_force_source_window else None
+            )
             + ";\n"
             "const INSTALL_STATIC_SKID_DIAGNOSTICS = "
             + str(args.static_skid_diagnostics).lower()
