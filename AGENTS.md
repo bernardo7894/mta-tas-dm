@@ -391,6 +391,11 @@ Convert it with
 with `infernus-physics/tools/audit_native_processcontrol_boundary.py`. This
 observer is diagnostic only because its extra reads can perturb render/source
 cadence and later vehicle/resource addresses must be treated as contamination.
+The Frida option `--frida-source-tag-order-diagnostics` adds a bounded,
+read-only hook on the exported `SetNativeProcessWheelSourceTagBridge`; it
+records bridge timing/process ordinal alongside ProcessControl rows and never
+writes tags or vehicle state. It distinguishes callback ordering from physics,
+and remains diagnostic even when an individual timer sample is accepted.
 The server `JOIN` event is watched both on stdout and the server log because
 redirected Debug-server stdout is not consistently flushed. Keep native rows separate from Lua
 `vehicleTelemetry` fields and preserve their provenance when merging diagnostic

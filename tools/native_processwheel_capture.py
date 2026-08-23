@@ -68,6 +68,7 @@ def _native_script(
     transmission_diagnostics: bool = True,
     state_writer_source_window: tuple[int, int] | None = None,
     capture_untagged_state_writers: bool = False,
+    source_tag_order_diagnostics: bool = False,
 ) -> str:
     bin_dir = _js_string(str(mta_bin))
     mta_dir = _js_string(str(mta_bin / "MTA"))
@@ -90,6 +91,7 @@ const PROCESSCOLLISION_SOURCE_WINDOW = {json.dumps(list(processcollision_source_
 const PROCESSSUSPENSION_SOURCE_WINDOW = {json.dumps(list(processsuspension_source_window) if processsuspension_source_window else None)};
 const STATE_WRITER_SOURCE_WINDOW = {json.dumps(list(state_writer_source_window) if state_writer_source_window else None)};
 const CAPTURE_UNTAGGED_STATE_WRITERS = {str(capture_untagged_state_writers).lower()};
+const INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS = {str(source_tag_order_diagnostics).lower()};
 const INSTALL_STATE_WRITER_DIAGNOSTICS = {str(writer_diagnostics).lower()};
 const INSTALL_TRANSMISSION_DIAGNOSTICS = {str(transmission_diagnostics).lower()};
 const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":"))};
@@ -218,6 +220,7 @@ try {{
 }}
 
 if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
+    || INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS
     || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)
     || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)
     || Array.isArray(STATE_WRITER_SOURCE_WINDOW)) {{
@@ -251,6 +254,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
     const gameTimeMs = main.base.add(0x77CB84);
     const staticAlreadySkidding = main.base.add(0x81CDAC);
     let frame = 0, processCalls = 0, wheelCalls = 0, batch = [];
+    let sourceTagBridgeEvents = [];
     let captureActive = !CAPTURE_FROM_FIRST_GAS;
     const preCaptureRecords = [];
     const maxPreCaptureRecords = 512;
@@ -370,6 +374,42 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
         if (batch.length && captureActive) {{
             send({{type:'native_batch', label:OUTPUT_LABEL, records:batch}});
             batch=[];
+        }}
+        if (sourceTagBridgeEvents.length && captureActive) {{
+            send({{type:'native_source_tag_bridge_batch', label:OUTPUT_LABEL, records:sourceTagBridgeEvents}});
+            sourceTagBridgeEvents=[];
+        }}
+    }}
+    if (INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS) {{
+        try {{
+            const multiplayer = Process.findModuleByName('multiplayer_sa_d.dll');
+            const sourceTagBridge = multiplayer && multiplayer.findExportByName('SetNativeProcessWheelSourceTagBridge');
+            if (!sourceTagBridge)
+                throw new Error('SetNativeProcessWheelSourceTagBridge export not found');
+            Interceptor.attach(sourceTagBridge, {{
+                onEnter(args) {{
+                    if (!captureActive) return;
+                    try {{
+                        this.sourceTagBridgeEvent = {{
+                            source:'gta-native-source-tag-bridge',
+                            label:OUTPUT_LABEL,
+                            requestedSourceFrameTag:args[0].toInt32(),
+                            requestedSourceTickMsTag:args[1].toInt32(),
+                            gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
+                            gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
+                            timerStep:f(timerStep),
+                            processCalls,
+                            processOrdinal:frame,
+                        }};
+                    }} catch (_) {{ this.sourceTagBridgeEvent = null; }}
+                }},
+                onLeave() {{
+                    if (this.sourceTagBridgeEvent && captureActive)
+                        sourceTagBridgeEvents.push(this.sourceTagBridgeEvent);
+                }},
+            }});
+        }} catch (error) {{
+            send({{type:'native_hook_error', message:'SetNativeProcessWheelSourceTagBridge: ' + String(error)}});
         }}
     }}
     try {{
@@ -2415,6 +2455,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--frida-source-tag-order-diagnostics",
+        action="store_true",
+        help=(
+            "record the read-only source-tag bridge call timing/order relative to "
+            "native ProcessControl; bounded diagnostic only"
+        ),
+    )
+    parser.add_argument(
         "--frida-processwheel-with-processsuspension",
         action="store_true",
         help=(
@@ -2537,6 +2585,8 @@ def main() -> int:
             parser.error("--frida-state-writer-source-window requires the Frida route")
     if args.frida_state_writer_capture_untagged and not args.frida_state_writer_source_window:
         parser.error("--frida-state-writer-capture-untagged requires --frida-state-writer-source-window")
+    if args.frida_source_tag_order_diagnostics and (args.cpp_hook or args.timing_only):
+        parser.error("--frida-source-tag-order-diagnostics requires the Frida route")
     if args.frida_processcollision_source_window:
         start_frame, end_frame = args.frida_processcollision_source_window
         if start_frame < 1 or end_frame < start_frame:
@@ -2631,8 +2681,14 @@ def main() -> int:
                 f"--reference-map-resource requires --duration >= {minimum_duration:.1f}s "
                 "to retain the complete TAS playback"
             )
-    if args.suspension_stage_only and (not args.collision_diagnostics or args.cpp_hook or args.timing_only):
-        parser.error("--suspension-stage-only requires Frida --collision-diagnostics")
+    if args.suspension_stage_only and (
+        (not args.collision_diagnostics and not args.frida_source_tag_order_diagnostics)
+        or args.cpp_hook or args.timing_only
+    ):
+        parser.error(
+            "--suspension-stage-only requires Frida --collision-diagnostics, "
+            "unless it is used for source-tag-order diagnostics"
+        )
     if args.stage_force_diagnostics and not args.suspension_stage_only:
         parser.error("--stage-force-diagnostics requires --suspension-stage-only")
     if args.stage_force_events and not args.suspension_stage_only:
@@ -2959,6 +3015,7 @@ def main() -> int:
             if args.frida_state_writer_source_window else None
         ),
         "capture_untagged_state_writers": bool(args.frida_state_writer_capture_untagged),
+        "source_tag_order_diagnostics": bool(args.frida_source_tag_order_diagnostics),
         "angular_writer_rva_client_dll": hex(0x7AE0B0),
         "paired_processsuspension": bool(args.frida_processwheel_with_processsuspension),
         "processcollision_source_window": (
@@ -3102,6 +3159,10 @@ def main() -> int:
             "native_hook_error", "native_exception", "info", "warn", "error",
         }:
             print(f"[frida] {payload}")
+        elif kind == "native_source_tag_bridge_batch":
+            with args.output.open("a", encoding="utf-8") as stream:
+                for row in payload.get("records", []):
+                    stream.write(json.dumps(row, separators=(",", ":")) + "\n")
         elif kind == "native_counts":
             print(f"[native] process={payload.get('processCalls')} wheel={payload.get('wheelCalls')} frame={payload.get('frame')}")
         elif kind == "native_timing":
@@ -3145,6 +3206,7 @@ def main() -> int:
             if args.frida_state_writer_source_window else None
         ),
         capture_untagged_state_writers=bool(args.frida_state_writer_capture_untagged),
+        source_tag_order_diagnostics=bool(args.frida_source_tag_order_diagnostics),
     )
     if args.orchestrator and not (args.cpp_hook or args.timing_only):
         if not args.orchestrator.exists():
@@ -3158,6 +3220,7 @@ def main() -> int:
         marker = (
             "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS\n"
             "    || INSTALL_PAIRED_SUSPENSION\n"
+            "    || INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS\n"
             "    || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)\n"
             "    || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)\n"
             "    || Array.isArray(STATE_WRITER_SOURCE_WINDOW)) {"
@@ -3171,6 +3234,9 @@ def main() -> int:
             + ";\n"
             "const INSTALL_PAIRED_SUSPENSION = "
             + str(args.frida_processwheel_with_processsuspension).lower()
+            + ";\n"
+            "const INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS = "
+            + str(args.frida_source_tag_order_diagnostics).lower()
             + ";\n"
             "const SUSPENSION_STAGE_ONLY = "
             + str(args.suspension_stage_only).lower()

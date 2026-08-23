@@ -324,6 +324,23 @@ def test_frida_processwheel_can_skip_transmission_boundary_hook():
     assert "if (INSTALL_TRANSMISSION_DIAGNOSTICS)" in script
 
 
+def test_source_tag_order_diagnostic_is_read_only_and_bounded():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "tag-order",
+        install_wheel_hook=False,
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+        source_tag_order_diagnostics=True,
+    )
+    assert "const INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS = true;" in script
+    assert "SetNativeProcessWheelSourceTagBridge" in script
+    assert "source:'gta-native-source-tag-bridge'" in script
+    assert "native_source_tag_bridge_batch" in script
+    assert "write" not in script[script.index("source:'gta-native-source-tag-bridge'"):script.index("source:'gta-native-source-tag-bridge'") + 600]
+
+
 def test_suspension_stage_can_pair_public_angular_writer_diagnostic():
     tool = _load_tool()
     script = tool._native_script(
