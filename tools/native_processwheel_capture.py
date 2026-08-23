@@ -53,6 +53,7 @@ def _native_script(
     install_wheel_hook: bool = True,
     collision_diagnostics: bool = False,
     suspension_stage_only: bool = False,
+    capture_stage_processcollision: bool = True,
     stage_force_diagnostics: bool = False,
     stage_force_events: bool = False,
     stage_force_source_window: tuple[int, int] | None = None,
@@ -87,6 +88,7 @@ const INSTALL_NATIVE_WHEEL_HOOK = {str(install_wheel_hook).lower()};
 const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
 const INSTALL_PAIRED_SUSPENSION = {str(paired_processsuspension).lower()};
 const SUSPENSION_STAGE_ONLY = {str(suspension_stage_only).lower()};
+const CAPTURE_STAGE_PROCESSCOLLISION = {str(capture_stage_processcollision).lower()};
 const STAGE_FORCE_DIAGNOSTICS = {str(stage_force_diagnostics).lower()};
 const STAGE_FORCE_EVENTS = {str(stage_force_events).lower()};
 const STAGE_FORCE_SOURCE_WINDOW = {json.dumps(list(stage_force_source_window) if stage_force_source_window else None)};
@@ -1228,7 +1230,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
         // Reduced stage mode keeps only this narrow read-only boundary probe
         // in addition to ProcessEntityCollision/ProcessSuspension.  It shows
         // whether GTA advances the incoming motion before the wheel stack.
-        if (SUSPENSION_STAGE_ONLY) {{
+        if (SUSPENSION_STAGE_ONLY && CAPTURE_STAGE_PROCESSCOLLISION) {{
         Interceptor.attach(processControlCollisionCheck, {{
             onEnter() {{
                 const vehicle = this.context.ecx;
@@ -1261,7 +1263,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
         // The reduced stage route observes it without installing force or
         // ProcessWheel hooks, so reference-frame integration can be separated
         // from the ProcessControl exit state.
-        if (SUSPENSION_STAGE_ONLY || Array.isArray(PROCESSCOLLISION_SOURCE_WINDOW)) {{
+        if ((SUSPENSION_STAGE_ONLY && CAPTURE_STAGE_PROCESSCOLLISION)
+            || Array.isArray(PROCESSCOLLISION_SOURCE_WINDOW)) {{
         Interceptor.attach(processCollision, {{
             onEnter() {{
                 const sourceTag = readNativeSourceTag();
@@ -2916,6 +2919,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--frida-stage-no-processcollision",
+        action="store_true",
+        help=(
+            "in suspension-stage-only mode, omit the heavy ProcessControlCollisionCheck/"
+            "ProcessCollision observers; stage rows remain read-only diagnostics"
+        ),
+    )
+    parser.add_argument(
         "--stage-force-diagnostics",
         action="store_true",
         help=(
@@ -3130,13 +3141,17 @@ def main() -> int:
                 f"--reference-map-resource requires --duration >= {minimum_duration:.1f}s "
                 "to retain the complete TAS playback"
             )
+    if args.frida_stage_no_processcollision and not args.suspension_stage_only:
+        parser.error("--frida-stage-no-processcollision requires --suspension-stage-only")
     if args.suspension_stage_only and (
-        (not args.collision_diagnostics and not args.frida_source_tag_order_diagnostics)
+        (not args.collision_diagnostics
+         and not args.frida_source_tag_order_diagnostics
+         and not args.frida_stage_no_processcollision)
         or args.cpp_hook or args.timing_only
     ):
         parser.error(
             "--suspension-stage-only requires Frida --collision-diagnostics, "
-            "unless it is used for source-tag-order diagnostics"
+            "--frida-stage-no-processcollision, or source-tag-order diagnostics"
         )
     if args.frida_stage_source_window:
         start_frame, end_frame = args.frida_stage_source_window
@@ -3572,6 +3587,9 @@ def main() -> int:
         if args.cpp_hook or args.timing_only or one_tick_config is not None else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
         "suspension_stage_only": bool(args.suspension_stage_only),
+        "frida_stage_processcollision": bool(
+            args.suspension_stage_only and not args.frida_stage_no_processcollision
+        ),
         "stage_force_diagnostics": bool(args.stage_force_diagnostics),
         "stage_force_events": bool(args.stage_force_events),
         "stage_force_source_window": (
@@ -3662,6 +3680,7 @@ def main() -> int:
         install_wheel_hook=not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
         collision_diagnostics=args.collision_diagnostics,
         suspension_stage_only=args.suspension_stage_only,
+        capture_stage_processcollision=not args.frida_stage_no_processcollision,
         stage_force_diagnostics=args.stage_force_diagnostics,
         stage_force_events=args.stage_force_events,
         stage_force_source_window=(

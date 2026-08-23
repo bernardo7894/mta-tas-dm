@@ -174,6 +174,19 @@ rejected. The first accepted stage entry differs from the setter output, while
 tag-2 entry inherits tag-1 exit exactly. The intervening rejected/untagged
 startup history is provenance only and cannot be replayed or injected.
 
+To test whether the heavy ProcessControlCollisionCheck/ProcessCollision
+observers themselves perturb this startup boundary, add
+`--frida-stage-no-processcollision` together with
+`--suspension-stage-only --frida-stage-source-window START END`. This is an
+explicit lightweight stage route: it retains exact ProcessControl stage rows,
+the named public/nested setter diagnostics, direct timer values, and matrices,
+but omits the heavy collision-boundary observers. It remains diagnostic only;
+private suspension/contact equivalence is not asserted by that route. The v18
+controls-only repeat retained accepted tags 1--3 and the same approximately
+`0.000578` rad/s setter-to-tag-1 entry difference, so heavy collision observer
+overhead is not a sufficient explanation. The missing untagged/rejected
+interval remains excluded from continuous acceptance.
+
 The `bVehicleColProcessed` bit is byte `0x42B`, bit 0. The hook records
 `CTimer::GetTimeStep` at `0x77CB5C`; pass that observed multiplier to
 `tools/run_one_tick_simulator.py --native-timer-step`, and pass the same config

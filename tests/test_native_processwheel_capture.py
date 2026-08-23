@@ -374,6 +374,25 @@ def test_frida_stage_source_window_limits_exact_stage_rows_and_keeps_named_sette
     assert "DebugSymbol.findFunctionsNamed(name)" in script
 
 
+def test_frida_stage_can_omit_heavy_processcollision_observers():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "turn-stage-startup-light",
+        collision_diagnostics=False,
+        suspension_stage_only=True,
+        capture_stage_processcollision=False,
+        stage_source_window=(1, 3),
+        state_writer_source_window=(1, 3),
+        capture_untagged_state_writers=True,
+        writer_diagnostics=True,
+        transmission_diagnostics=False,
+    )
+    assert "const CAPTURE_STAGE_PROCESSCOLLISION = false;" in script
+    assert "if (SUSPENSION_STAGE_ONLY && CAPTURE_STAGE_PROCESSCOLLISION)" in script
+    assert "SUSPENSION_STAGE_ONLY && CAPTURE_STAGE_PROCESSCOLLISION)\n            || Array.isArray(PROCESSCOLLISION_SOURCE_WINDOW)" in script
+
+
 def test_frida_processsuspension_source_window_adds_only_narrow_boundary():
     tool = _load_tool()
     script = tool._native_script(
