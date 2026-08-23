@@ -197,11 +197,15 @@ try {{
 }} catch(e) {{ send({{type:'native_bootstrap_error', message:String(e)}}); }}
 }}
 
-if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
+if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
+    || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)) {{
 (function installNativeWheelHook() {{
     const main = Process.mainModule;
     const processWheel = main.base.add({PROCESS_WHEEL_RVA});
     const processControl = main.base.add({PROCESS_CONTROL_RVA});
+    const setMoveSpeedRva = 0x15BD10;
+    const vehicleSetMoveSpeedRva = 0x1DE7B0;
+    const staticSetElementVelocityRva = 0x7B0010;
     const processControlCollisionCheck = main.base.add(0x2A29C0);
     const processEntityCollision = main.base.add(0x2ACE70);
     const automobileCollisionPoints = main.base.add(0x81BFF8);
@@ -1068,6 +1072,87 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {{
             }}
         }});
         }}
+        if (Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)) {{
+            const gameSa = Process.findModuleByName('game_sa_d.dll');
+            if (gameSa) {{
+                const setMoveSpeedTargets = [
+                    ['CPhysicalSA::SetMoveSpeed', gameSa.base.add(setMoveSpeedRva)],
+                    ['CVehicleSA::SetMoveSpeed', gameSa.base.add(vehicleSetMoveSpeedRva)],
+                ];
+                for (const target of setMoveSpeedTargets) {{
+                    try {{
+                        Interceptor.attach(target[1], {{
+                            onEnter() {{
+                                try {{
+                                    const sourceTag = readNativeSourceTag();
+                                    if (sourceTag.frame === null
+                                        || sourceTag.frame < PROCESSWHEEL_SOURCE_WINDOW[0]
+                                        || sourceTag.frame > PROCESSWHEEL_SOURCE_WINDOW[1]) return;
+                                    const speedPtr = this.context.esp.add(4).readPointer();
+                                    this.nativeSetMoveSpeedRecord = {{
+                                        target:target[0],
+                                        sourceFrameTag:sourceTag.frame,
+                                        sourceTickMsTag:sourceTag.tick,
+                                        gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
+                                        gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
+                                        timerStep:f(timerStep),
+                                        wrapper:this.context.ecx.toString(),
+                                        speed:vec(speedPtr),
+                                        returnAddress:this.returnAddress.toString(),
+                                    }};
+                                }} catch (_) {{}}
+                            }},
+                            onLeave() {{
+                                const record = this.nativeSetMoveSpeedRecord;
+                                if (!record || !captureActive) return;
+                                batch.push({{
+                                    source:'gta-native-set-move-speed', label:OUTPUT_LABEL,
+                                    ...record,
+                                }});
+                                if (batch.length >= 32) flush();
+                            }},
+                        }});
+                    }} catch (_) {{}}
+                }}
+            }}
+        }}
+        const clientDll = Process.findModuleByName('client_d.dll');
+        if (clientDll) {{
+            try {{
+                Interceptor.attach(clientDll.base.add(staticSetElementVelocityRva), {{
+                    onEnter() {{
+                        try {{
+                            const sourceTag = readNativeSourceTag();
+                            if (sourceTag.frame === null
+                                || sourceTag.frame < PROCESSWHEEL_SOURCE_WINDOW[0]
+                                || sourceTag.frame > PROCESSWHEEL_SOURCE_WINDOW[1]) return;
+                            const entityPtr = this.context.esp.add(4).readPointer();
+                            const speedPtr = this.context.esp.add(8).readPointer();
+                            this.nativeSetElementVelocity = {{
+                                sourceFrameTag:sourceTag.frame,
+                                sourceTickMsTag:sourceTag.tick,
+                                gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
+                                gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
+                                timerStep:f(timerStep),
+                                clientEntity:entityPtr.toString(),
+                                speed:vec(speedPtr),
+                                returnAddress:this.returnAddress.toString(),
+                            }};
+                        }} catch (_) {{}}
+                    }},
+                    onLeave() {{
+                        const record = this.nativeSetElementVelocity;
+                        if (!record || !captureActive) return;
+                        batch.push({{
+                            source:'gta-native-set-element-velocity',
+                            label:OUTPUT_LABEL,
+                            ...record,
+                        }});
+                        if (batch.length >= 32) flush();
+                    }},
+                }});
+            }} catch (_) {{}}
+        }}
     }} catch(e) {{ send({{type:'native_hook_error', message:String(e)}}); }}
     setInterval(flush,100); setInterval(() => send({{type:'native_counts', processCalls, wheelCalls, frame}}),3000);
 }})();
@@ -1252,17 +1337,52 @@ def _prepare_controls_only_playback(mta_bin: Path) -> Any:
         / "tas" / "client.lua"
     )
     if not client.exists():
-        return lambda: None
+        raise RuntimeError(f"controls-only TAS resource is missing: {client}")
     original = client.read_bytes()
     markers = (
         (b"useOnlyBinds = false", b"useOnlyBinds = true"),
         (b"playbackInterpolation = true", b"playbackInterpolation = false"),
     )
     patched = original
-    for old, new in markers:
-        if old not in patched:
-            return lambda: None
-        patched = patched.replace(old, new, 1)
+    # The deployed Debug TAS resource may already have interpolation disabled;
+    # that is compatible with controls-only playback.  Do not abort the whole
+    # preparation merely because that default differs from the repository copy.
+    use_only_old, use_only_new = markers[0]
+    if use_only_old not in patched:
+        raise RuntimeError("controls-only TAS preparation could not find useOnlyBinds=false")
+    patched = patched.replace(use_only_old, use_only_new, 1)
+    interpolation_old, interpolation_new = markers[1]
+    if interpolation_old in patched:
+        patched = patched.replace(interpolation_old, interpolation_new, 1)
+    elif interpolation_new not in patched:
+        raise RuntimeError("controls-only TAS preparation could not find playbackInterpolation setting")
+    # The TAS user config is loaded after the defaults above and can silently
+    # restore useOnlyBinds=false.  Force the diagnostic mode after that load;
+    # this is temporary and the exact original file is restored below.
+    anchor = b"\tlocal cachedWarpsLoaded = false"
+    if patched.count(anchor) != 1:
+        raise RuntimeError("controls-only TAS preparation could not find post-config anchor")
+    newline = b"\r\n" if b"\r\n" in patched else b"\n"
+    override = newline.join(
+        (
+            b"\t-- native-capture controls-only: override user config after load",
+            b"\ttas.settings.useOnlyBinds = true",
+            b"\ttas.settings.playbackInterpolation = false",
+            anchor,
+        )
+    )
+    patched = patched.replace(anchor, override, 1)
+    state_guard = b"if not tas.settings.useOnlyBinds then"
+    if patched.count(state_guard) != 2:
+        raise RuntimeError("controls-only TAS preparation found an unexpected playback branch count")
+    # Belt-and-suspenders diagnostic guard: the setting override above covers
+    # user config, while this first branch guard makes the playback state-write
+    # boundary unambiguous even if a future config path changes the setting.
+    patched = patched.replace(
+        state_guard,
+        b"if false then -- native-capture controls-only state writes disabled",
+        1,
+    )
     client.write_bytes(patched)
 
     def restore() -> None:
@@ -1283,7 +1403,28 @@ def _prepare_playback_pre_render(mta_bin: Path) -> Any:
     marker = b"playbackPreRender = false"
     if original.count(marker) != 1:
         return lambda: None
-    client.write_bytes(original.replace(marker, b"playbackPreRender = true", 1))
+    patched = original.replace(marker, b"playbackPreRender = true", 1)
+    # User config is loaded after the defaults.  If the controls-only prep has
+    # already inserted its post-config anchor, add this override there too;
+    # otherwise keep the small fixture/standalone prep reversible as before.
+    config_anchor = b"\ttas.settings.playbackInterpolation = false"
+    if config_anchor in patched:
+        newline = b"\r\n" if b"\r\n" in patched else b"\n"
+        patched = patched.replace(
+            config_anchor,
+            config_anchor + newline + b"\ttas.settings.playbackPreRender = true",
+            1,
+        )
+    else:
+        anchor = b"\tlocal cachedWarpsLoaded = false"
+        if patched.count(anchor) == 1:
+            newline = b"\r\n" if b"\r\n" in patched else b"\n"
+            patched = patched.replace(
+                anchor,
+                b"\ttas.settings.playbackPreRender = true" + newline + anchor,
+                1,
+            )
+    client.write_bytes(patched)
 
     def restore() -> None:
         client.write_bytes(original)
@@ -2331,6 +2472,7 @@ def main() -> int:
             list(args.frida_processwheel_source_window)
             if args.frida_processwheel_source_window else None
         ),
+        "native_state_writer_diagnostics": bool(args.frida_processwheel_source_window),
         "capture_level": "collision-stage" if args.suspension_stage_only else "wheel",
         "install_wheel_hook": not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
         "direct_observable": (

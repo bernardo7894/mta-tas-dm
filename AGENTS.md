@@ -253,7 +253,22 @@ are the `wheelContactSpeed` argument at ProcessWheel entry, after the preceding
 GTA suspension pass. The capture tool's recommended `--controls-only-playback`
 mode temporarily disables legacy TAS pose/velocity writes; without it, the TAS
 resource imposes recorded state and the native rows are state-forced diagnostics.
-`--pose-linear-only-playback` is a separate diagnostic mode that writes recorded
+The preparation now also overrides user config after it loads and hard-disables
+the playback state-write branch, failing loudly if the deployed TAS resource
+shape is unexpected. This is necessary because the deployed Debug TAS copy had
+`playbackInterpolation=false` while the older prep required the `true` marker
+and silently performed no preparation; native `CStaticFunctionDefinitions::SetElementVelocity`
+observations then showed recorded velocity writes during supposedly
+controls-only captures. Earlier actual-race stage/preRender captures made with
+that silent no-op are state-forced and must not be used as controls-only
+trajectory evidence. The corrected bounded capture has no
+`gta-native-set-element-velocity` rows; its accepted source-tag window is the
+first valid controls-only replay diagnostic. The corrected tag-26 native wheel
+row begins near zero forward velocity and applies thrust about `0.0009600094`;
+its raw wheel delta is an independent live-native observation, not the recorded
+reference state. The source-window route also records native
+`CVehicleSA::SetMoveSpeed` calls and the client-side velocity-writer diagnostic
+without injecting or changing state. `--pose-linear-only-playback` is a separate diagnostic mode that writes recorded
 position/rotation/linear velocity but leaves angular velocity native; it is not
 an independent trajectory. `--static-skid-diagnostics` reads the private
 `bAlreadySkidding` global at `0xC1CDAC` on the Frida route; the C++ route has the

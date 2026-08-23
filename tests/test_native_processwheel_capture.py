@@ -83,6 +83,54 @@ def test_playback_pre_render_prep_is_reversible(tmp_path):
     assert client.read_bytes() == original
 
 
+def test_controls_only_and_prerender_overrides_survive_user_config(tmp_path):
+    tool = _load_tool()
+    resource = tmp_path / "server" / "mods" / "deathmatch" / "resources" / "tas"
+    resource.mkdir(parents=True)
+    original = (
+        b"useOnlyBinds = false\n"
+        b"playbackInterpolation = true\n"
+        b"playbackPreRender = false\n"
+        b"if not tas.settings.useOnlyBinds then\n"
+        b"if not tas.settings.useOnlyBinds then\n"
+        b"\tlocal cachedWarpsLoaded = false\n"
+    )
+    client = resource / "client.lua"
+    client.write_bytes(original)
+    restore_controls = tool._prepare_controls_only_playback(tmp_path)
+    prepared = client.read_bytes()
+    assert b"tas.settings.useOnlyBinds = true" in prepared
+    assert b"tas.settings.playbackInterpolation = false" in prepared
+    assert b"if false then -- native-capture controls-only state writes disabled" in prepared
+    restore_pre_render = tool._prepare_playback_pre_render(tmp_path)
+    prepared = client.read_bytes()
+    assert b"tas.settings.playbackPreRender = true" in prepared
+    restore_pre_render()
+    restore_controls()
+    assert client.read_bytes() == original
+
+
+def test_controls_only_accepts_already_disabled_interpolation_default(tmp_path):
+    tool = _load_tool()
+    resource = tmp_path / "server" / "mods" / "deathmatch" / "resources" / "tas"
+    resource.mkdir(parents=True)
+    client = resource / "client.lua"
+    original = (
+        b"useOnlyBinds = false\n"
+        b"playbackInterpolation = false\n"
+        b"if not tas.settings.useOnlyBinds then\n"
+        b"if not tas.settings.useOnlyBinds then\n"
+        b"\tlocal cachedWarpsLoaded = false\n"
+    )
+    client.write_bytes(original)
+    restore = tool._prepare_controls_only_playback(tmp_path)
+    prepared = client.read_bytes()
+    assert b"tas.settings.useOnlyBinds = true" in prepared
+    assert b"native-capture controls-only state writes disabled" in prepared
+    restore()
+    assert client.read_bytes() == original
+
+
 def test_actual_race_duration_guard_preserves_full_playback():
     source = TOOL.read_text(encoding="utf-8")
     assert "17781.0 / 99.0" in source
@@ -168,6 +216,11 @@ def test_frida_processwheel_source_window_limits_rows_without_disabling_hook():
     assert "sourceTag.frame < PROCESSWHEEL_SOURCE_WINDOW[0]" in script
     assert "sourceFrameTag:sourceTag.frame" in script
     assert "timerStep:f(timerStep)" in script
+    assert "CPhysicalSA::SetMoveSpeed" in script
+    assert "CVehicleSA::SetMoveSpeed" in script
+    assert "staticSetElementVelocityRva = 0x7B0010" in script
+    assert "source:'gta-native-set-element-velocity'" in script
+    assert "source:'gta-native-set-move-speed'" in script
     assert "if (INSTALL_NATIVE_WHEEL_HOOK)" in script
 
 
@@ -180,7 +233,7 @@ def test_suspension_stage_only_omits_wheel_hook_but_keeps_stage_hooks():
         collision_diagnostics=True,
         suspension_stage_only=True,
     )
-    assert "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS)" in script
+    assert "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS" in script
     assert "source:'gta-native-process-stage'" in script
     assert "GetNativeProcessWheelSourceTagBridge" in script
     assert "sourceFrameTagEntry" in script
