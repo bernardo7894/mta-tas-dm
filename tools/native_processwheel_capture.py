@@ -58,6 +58,8 @@ def _native_script(
     one_tick_config: dict[str, Any] | None = None,
     skip_frida_bootstrap: bool = False,
     processwheel_source_window: tuple[int, int] | None = None,
+    writer_diagnostics: bool = True,
+    transmission_diagnostics: bool = True,
 ) -> str:
     bin_dir = _js_string(str(mta_bin))
     mta_dir = _js_string(str(mta_bin / "MTA"))
@@ -72,6 +74,8 @@ const SUSPENSION_STAGE_ONLY = {str(suspension_stage_only).lower()};
 const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
 const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
 const PROCESSWHEEL_SOURCE_WINDOW = {json.dumps(list(processwheel_source_window) if processwheel_source_window else None)};
+const INSTALL_STATE_WRITER_DIAGNOSTICS = {str(writer_diagnostics).lower()};
+const INSTALL_TRANSMISSION_DIAGNOSTICS = {str(transmission_diagnostics).lower()};
 const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":"))};
 let bootstrapDone = false;
 
@@ -550,6 +554,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                 if (activeControlKey === key) activeControlKey = null;
             }},
         }});
+        if (INSTALL_TRANSMISSION_DIAGNOSTICS) {{
         Interceptor.attach(calculateDriveAcceleration, {{
             onEnter() {{
                 const key = activeControlKey;
@@ -605,6 +610,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                 }} catch(_) {{}}
             }},
         }});
+        }}
         if (INSTALL_COLLISION_DIAGNOSTICS) {{
         Interceptor.attach(processEntityCollision, {{
             onEnter() {{
@@ -1072,7 +1078,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
             }}
         }});
         }}
-        if (Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)) {{
+        if (INSTALL_STATE_WRITER_DIAGNOSTICS && Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)) {{
             const gameSa = Process.findModuleByName('game_sa_d.dll');
             if (gameSa) {{
                 const setMoveSpeedTargets = [
@@ -2064,6 +2070,22 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--frida-processwheel-no-writer-diagnostics",
+        action="store_true",
+        help=(
+            "skip SetMoveSpeed/SetElementVelocity side-channel hooks for a bounded "
+            "ProcessWheel window; use only after state-write absence is independently established"
+        ),
+    )
+    parser.add_argument(
+        "--frida-processwheel-no-transmission-diagnostics",
+        action="store_true",
+        help=(
+            "skip the CalculateDriveAcceleration boundary hook for a bounded "
+            "ProcessWheel window after transmission behavior has been captured separately"
+        ),
+    )
+    parser.add_argument(
         "--capture-from-first-gas",
         action="store_true",
         help="buffer native rows until the first nonzero gas/brake, avoiding warm-up IPC overhead",
@@ -2472,7 +2494,11 @@ def main() -> int:
             list(args.frida_processwheel_source_window)
             if args.frida_processwheel_source_window else None
         ),
-        "native_state_writer_diagnostics": bool(args.frida_processwheel_source_window),
+        "native_state_writer_diagnostics": bool(
+            args.frida_processwheel_source_window
+            and not args.frida_processwheel_no_writer_diagnostics
+        ),
+        "native_transmission_diagnostics": not args.frida_processwheel_no_transmission_diagnostics,
         "capture_level": "collision-stage" if args.suspension_stage_only else "wheel",
         "install_wheel_hook": not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
         "direct_observable": (
@@ -2608,6 +2634,8 @@ def main() -> int:
             tuple(args.frida_processwheel_source_window)
             if args.frida_processwheel_source_window else None
         ),
+        writer_diagnostics=not args.frida_processwheel_no_writer_diagnostics,
+        transmission_diagnostics=not args.frida_processwheel_no_transmission_diagnostics,
     )
     if args.orchestrator and not (args.cpp_hook or args.timing_only):
         if not args.orchestrator.exists():
@@ -2640,6 +2668,12 @@ def main() -> int:
                 list(args.frida_processwheel_source_window)
                 if args.frida_processwheel_source_window else None
             )
+            + ";\n"
+            "const INSTALL_STATE_WRITER_DIAGNOSTICS = "
+            + str(not args.frida_processwheel_no_writer_diagnostics).lower()
+            + ";\n"
+            "const INSTALL_TRANSMISSION_DIAGNOSTICS = "
+            + str(not args.frida_processwheel_no_transmission_diagnostics).lower()
             + ";\n"
             "const ONE_TICK_CONFIG = "
             + json.dumps(one_tick_config or {}, separators=(",", ":"))

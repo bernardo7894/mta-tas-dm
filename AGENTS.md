@@ -268,7 +268,13 @@ row begins near zero forward velocity and applies thrust about `0.0009600094`;
 its raw wheel delta is an independent live-native observation, not the recorded
 reference state. The source-window route also records native
 `CVehicleSA::SetMoveSpeed` calls and the client-side velocity-writer diagnostic
-without injecting or changing state. `--pose-linear-only-playback` is a separate diagnostic mode that writes recorded
+without injecting or changing state. After a corrected run establishes that
+those writer rows are absent, `--frida-processwheel-no-writer-diagnostics`
+skips those side-channel hooks to reduce observer overhead. The separate
+`--frida-processwheel-no-transmission-diagnostics` option skips the read-only
+`CalculateDriveAcceleration` hook after its boundary has been captured; both
+options are bounded diagnostic modes and do not authorize native-state
+injection. `--pose-linear-only-playback` is a separate diagnostic mode that writes recorded
 position/rotation/linear velocity but leaves angular velocity native; it is not
 an independent trajectory. `--static-skid-diagnostics` reads the private
 `bAlreadySkidding` global at `0xC1CDAC` on the Frida route; the C++ route has the

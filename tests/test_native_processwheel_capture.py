@@ -217,12 +217,39 @@ def test_frida_processwheel_source_window_limits_rows_without_disabling_hook():
     assert "sourceFrameTag:sourceTag.frame" in script
     assert "timerStep:f(timerStep)" in script
     assert "transmissionCalls:c.transmissionCalls" in script
+    assert "const INSTALL_STATE_WRITER_DIAGNOSTICS = true;" in script
+    assert "const INSTALL_TRANSMISSION_DIAGNOSTICS = true;" in script
     assert "CPhysicalSA::SetMoveSpeed" in script
     assert "CVehicleSA::SetMoveSpeed" in script
     assert "staticSetElementVelocityRva = 0x7B0010" in script
     assert "source:'gta-native-set-element-velocity'" in script
     assert "source:'gta-native-set-move-speed'" in script
     assert "if (INSTALL_NATIVE_WHEEL_HOOK)" in script
+
+
+def test_frida_processwheel_can_skip_writer_side_channel_hooks():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "wheel-window-no-writers",
+        processwheel_source_window=(20, 100),
+        writer_diagnostics=False,
+    )
+    assert "const INSTALL_STATE_WRITER_DIAGNOSTICS = false;" in script
+    assert "if (INSTALL_STATE_WRITER_DIAGNOSTICS && Array.isArray(PROCESSWHEEL_SOURCE_WINDOW))" in script
+
+
+def test_frida_processwheel_can_skip_transmission_boundary_hook():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "wheel-window-no-transmission",
+        processwheel_source_window=(20, 100),
+        writer_diagnostics=False,
+        transmission_diagnostics=False,
+    )
+    assert "const INSTALL_TRANSMISSION_DIAGNOSTICS = false;" in script
+    assert "if (INSTALL_TRANSMISSION_DIAGNOSTICS)" in script
 
 
 def test_suspension_stage_only_omits_wheel_hook_but_keeps_stage_hooks():
