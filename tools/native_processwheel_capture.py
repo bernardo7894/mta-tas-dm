@@ -1631,6 +1631,13 @@ end)
     def restore() -> None:
         meta.write_bytes(original_meta)
         server.write_bytes(original_server)
+        # Successful cleanup no longer needs the recovery copies. They remain
+        # available only if preparation is interrupted before this callback.
+        for backup in (meta_backup, server_backup):
+            try:
+                backup.unlink()
+            except FileNotFoundError:
+                pass
 
     return restore
 

@@ -414,6 +414,8 @@ def test_actual_race_capture_removes_synthetic_map_and_polls_race_vehicle(tmp_pa
     restore()
     assert (resource / "meta.xml").read_bytes() == original_meta
     assert (resource / "server.lua").read_bytes() == original_server
+    assert not (resource / "meta.xml.native-capture-original").exists()
+    assert not (resource / "server.lua.native-capture-original").exists()
 
 
 def test_tas_automation_playback_replaces_native_event_and_restores(tmp_path):
