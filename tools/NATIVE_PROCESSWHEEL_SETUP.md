@@ -187,6 +187,15 @@ controls-only repeat retained accepted tags 1--3 and the same approximately
 overhead is not a sufficient explanation. The missing untagged/rejected
 interval remains excluded from continuous acceptance.
 
+For the next scheduler boundary observation, add
+`--frida-stage-capture-untagged-after-writer` and
+`--frida-state-writer-capture-untagged`. The option is bounded to eight
+model-411 ProcessControl rows after the public angular writer and records the
+direct timer and read-only stage snapshots; it does not write native state.
+The v19 run captured one untagged `timerStep=3.0` row immediately before tag 1,
+confirming the rejected native ProcessControl startup tick. Rejected rows are
+still explicitly excluded from acceptance and cannot be replayed.
+
 The `bVehicleColProcessed` bit is byte `0x42B`, bit 0. The hook records
 `CTimer::GetTimeStep` at `0x77CB5C`; pass that observed multiplier to
 `tools/run_one_tick_simulator.py --native-timer-step`, and pass the same config

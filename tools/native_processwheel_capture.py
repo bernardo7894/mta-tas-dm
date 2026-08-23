@@ -54,6 +54,7 @@ def _native_script(
     collision_diagnostics: bool = False,
     suspension_stage_only: bool = False,
     capture_stage_processcollision: bool = True,
+    capture_untagged_stage_after_writer: bool = False,
     stage_force_diagnostics: bool = False,
     stage_force_events: bool = False,
     stage_force_source_window: tuple[int, int] | None = None,
@@ -89,6 +90,7 @@ const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
 const INSTALL_PAIRED_SUSPENSION = {str(paired_processsuspension).lower()};
 const SUSPENSION_STAGE_ONLY = {str(suspension_stage_only).lower()};
 const CAPTURE_STAGE_PROCESSCOLLISION = {str(capture_stage_processcollision).lower()};
+const CAPTURE_UNTAGGED_STAGE_AFTER_WRITER = {str(capture_untagged_stage_after_writer).lower()};
 const STAGE_FORCE_DIAGNOSTICS = {str(stage_force_diagnostics).lower()};
 const STAGE_FORCE_EVENTS = {str(stage_force_events).lower()};
 const STAGE_FORCE_SOURCE_WINDOW = {json.dumps(list(stage_force_source_window) if stage_force_source_window else None)};
@@ -235,6 +237,7 @@ try {{
 
 if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
     || INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS
+    || CAPTURE_UNTAGGED_STAGE_AFTER_WRITER
     || Array.isArray(STAGE_SOURCE_WINDOW)
     || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)
     || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)
@@ -279,7 +282,9 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
     let postWriterUntaggedNativeSetterCalls = 0;
     let postWriterUntaggedSuspensionCaptured = false;
     let untaggedProcessCollisionBeforeSourceCount = 0;
+    let untaggedStageAfterWriterCount = 0;
     const maxUntaggedProcessCollisionBeforeSource = 8;
+    const maxUntaggedStageAfterWriter = 8;
     const preCaptureRecords = [];
     const maxPreCaptureRecords = 512;
     let oneTickInjected = false;
@@ -625,11 +630,21 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                         frame++; processCalls++;
                         const key = vehicle.toString();
                         const sourceTagEntry = readNativeSourceTag();
+                        const model = (()=>{{try{{return vehicle.add(0x22).readU16()}}catch(_){{return null}}}})();
+                        const captureUntaggedStageAfterWriter =
+                            SUSPENSION_STAGE_ONLY
+                            && CAPTURE_UNTAGGED_STAGE_AFTER_WRITER
+                            && publicAngularWriterObserved
+                            && model === 411
+                            && sourceTagIsUntagged(sourceTagEntry)
+                            && untaggedStageAfterWriterCount < maxUntaggedStageAfterWriter;
                         controlStates.set(key, {{
                             gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
                             gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
                             sourceFrameTagEntry:sourceTagEntry.frame,
                             sourceTickMsTagEntry:sourceTagEntry.tick,
+                            model,
+                            captureUntaggedStageAfterWriter,
                             timerOldStep:f(timerOldStep),
                             timerStepNonClipped:f(timerStepNonClipped),
                             timerStep:f(timerStep),
@@ -657,7 +672,9 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                             entityCollisionProcess:null,
                             gasPedalBefore:f(vehicle.add(0x49C)),
                             brakePedalBefore:f(vehicle.add(0x4A0)),
-                            suspensionAtProcessControlEntry:INSTALL_COLLISION_DIAGNOSTICS ? suspensionSnapshot(vehicle) : null,
+                            suspensionAtProcessControlEntry:(INSTALL_COLLISION_DIAGNOSTICS
+                                || captureUntaggedStageAfterWriter)
+                                ? suspensionSnapshot(vehicle) : null,
                             matrix:SUSPENSION_STAGE_ONLY ? matrixSnapshot(vehicle) : null,
                             suspensionProcess:null,
                             suspensionForceEvents:[],
@@ -696,10 +713,20 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                         || (typeof control.sourceFrameTagEntry === 'number'
                             && control.sourceFrameTagEntry >= STAGE_SOURCE_WINDOW[0]
                             && control.sourceFrameTagEntry <= STAGE_SOURCE_WINDOW[1]);
-                    if (SUSPENSION_STAGE_ONLY && captureActive && stageSourceInWindow) {{
+                    const captureUntaggedStage = control.captureUntaggedStageAfterWriter === true;
+                    if (SUSPENSION_STAGE_ONLY && captureActive
+                        && (stageSourceInWindow || captureUntaggedStage)) {{
                         const stageVehicle = this.nativeControlVehicle || this.context.ecx;
                         batch.push({{
-                            source:'gta-native-process-stage', label:OUTPUT_LABEL,
+                            source:'gta-native-process-stage',
+                            captureProvenance:captureUntaggedStage
+                                ? 'post-public-angular-writer-untagged-processcontrol'
+                                : 'tagged-source-processcontrol',
+                            sourceTagWasPublished:!sourceTagIsUntagged({{
+                                frame:control.sourceFrameTagEntry,
+                                tick:control.sourceTickMsTagEntry,
+                            }}),
+                            label:OUTPUT_LABEL,
                             processOrdinal:frame,
                             sourceFrameTagEntry:control.sourceFrameTagEntry,
                             sourceTickMsTagEntry:control.sourceTickMsTagEntry,
@@ -737,6 +764,11 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                             applyForces:STAGE_FORCE_DIAGNOSTICS ? control.applyForces : null,
                             applyTurnForces:STAGE_FORCE_DIAGNOSTICS ? control.applyTurnForces : null,
                         }});
+                        if (captureUntaggedStage) {{
+                            batch[batch.length - 1].source =
+                                'gta-native-process-stage-untagged-after-writer';
+                            untaggedStageAfterWriterCount++;
+                        }}
                         if (batch.length >= 4) flush();
                     }}
                 }} catch(_) {{}}
@@ -2927,6 +2959,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--frida-stage-capture-untagged-after-writer",
+        action="store_true",
+        help=(
+            "after the public angular writer, capture up to eight untagged model-411 "
+            "ProcessControl stage rows with direct timer/private snapshots; diagnostic only"
+        ),
+    )
+    parser.add_argument(
         "--stage-force-diagnostics",
         action="store_true",
         help=(
@@ -3143,10 +3183,27 @@ def main() -> int:
             )
     if args.frida_stage_no_processcollision and not args.suspension_stage_only:
         parser.error("--frida-stage-no-processcollision requires --suspension-stage-only")
+    if args.frida_stage_capture_untagged_after_writer and not args.suspension_stage_only:
+        parser.error("--frida-stage-capture-untagged-after-writer requires --suspension-stage-only")
+    if args.frida_stage_capture_untagged_after_writer and not args.frida_state_writer_source_window:
+        parser.error(
+            "--frida-stage-capture-untagged-after-writer requires "
+            "--frida-state-writer-source-window"
+        )
+    if args.frida_stage_capture_untagged_after_writer and not args.frida_state_writer_capture_untagged:
+        parser.error(
+            "--frida-stage-capture-untagged-after-writer requires "
+            "--frida-state-writer-capture-untagged"
+        )
+    if args.frida_stage_capture_untagged_after_writer and args.frida_processwheel_no_writer_diagnostics:
+        parser.error(
+            "--frida-stage-capture-untagged-after-writer cannot disable writer diagnostics"
+        )
     if args.suspension_stage_only and (
         (not args.collision_diagnostics
          and not args.frida_source_tag_order_diagnostics
-         and not args.frida_stage_no_processcollision)
+         and not args.frida_stage_no_processcollision
+         and not args.frida_stage_capture_untagged_after_writer)
         or args.cpp_hook or args.timing_only
     ):
         parser.error(
@@ -3590,6 +3647,9 @@ def main() -> int:
         "frida_stage_processcollision": bool(
             args.suspension_stage_only and not args.frida_stage_no_processcollision
         ),
+        "frida_stage_capture_untagged_after_writer": bool(
+            args.frida_stage_capture_untagged_after_writer
+        ),
         "stage_force_diagnostics": bool(args.stage_force_diagnostics),
         "stage_force_events": bool(args.stage_force_events),
         "stage_force_source_window": (
@@ -3681,6 +3741,7 @@ def main() -> int:
         collision_diagnostics=args.collision_diagnostics,
         suspension_stage_only=args.suspension_stage_only,
         capture_stage_processcollision=not args.frida_stage_no_processcollision,
+        capture_untagged_stage_after_writer=args.frida_stage_capture_untagged_after_writer,
         stage_force_diagnostics=args.stage_force_diagnostics,
         stage_force_events=args.stage_force_events,
         stage_force_source_window=(
@@ -3741,6 +3802,7 @@ def main() -> int:
             "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS\n"
             "    || INSTALL_PAIRED_SUSPENSION\n"
             "    || INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS\n"
+            "    || CAPTURE_UNTAGGED_STAGE_AFTER_WRITER\n"
             "    || Array.isArray(STAGE_SOURCE_WINDOW)\n"
             "    || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)\n"
             "    || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)\n"
@@ -3758,6 +3820,9 @@ def main() -> int:
             + ";\n"
             "const INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS = "
             + str(args.frida_source_tag_order_diagnostics).lower()
+            + ";\n"
+            "const CAPTURE_UNTAGGED_STAGE_AFTER_WRITER = "
+            + str(args.frida_stage_capture_untagged_after_writer).lower()
             + ";\n"
             "const CAPTURE_UNTAGGED_PROCESSWHEEL_AFTER_WRITER = "
             + str(args.frida_processwheel_capture_untagged_after_writer).lower()

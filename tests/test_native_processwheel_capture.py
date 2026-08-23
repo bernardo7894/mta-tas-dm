@@ -393,6 +393,28 @@ def test_frida_stage_can_omit_heavy_processcollision_observers():
     assert "SUSPENSION_STAGE_ONLY && CAPTURE_STAGE_PROCESSCOLLISION)\n            || Array.isArray(PROCESSCOLLISION_SOURCE_WINDOW)" in script
 
 
+def test_frida_stage_can_capture_bounded_untagged_rows_after_public_writer():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "turn-stage-startup-untagged",
+        collision_diagnostics=False,
+        suspension_stage_only=True,
+        capture_stage_processcollision=False,
+        capture_untagged_stage_after_writer=True,
+        stage_source_window=(1, 3),
+        state_writer_source_window=(1, 3),
+        capture_untagged_state_writers=True,
+        writer_diagnostics=True,
+        transmission_diagnostics=False,
+    )
+    assert "const CAPTURE_UNTAGGED_STAGE_AFTER_WRITER = true;" in script
+    assert "gta-native-process-stage-untagged-after-writer" in script
+    assert "post-public-angular-writer-untagged-processcontrol" in script
+    assert "untaggedStageAfterWriterCount < maxUntaggedStageAfterWriter" in script
+    assert "suspensionAtProcessControlEntry:(INSTALL_COLLISION_DIAGNOSTICS" in script
+
+
 def test_frida_processsuspension_source_window_adds_only_narrow_boundary():
     tool = _load_tool()
     script = tool._native_script(
