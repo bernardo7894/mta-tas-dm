@@ -337,7 +337,10 @@ runs after the ProcessControl stage row. In a timing-accepted launch window,
 its post-call matrix matches the controls-only Lua live matrix at the next
 source frame, while serialized TAS position remains a separate reference
 field. This boundary diagnostic must not be joined by pose or folded into
-continuous trajectory evidence.
+continuous trajectory evidence. The bounded wheel route also accepts
+`--frida-processcollision-source-window START END` to publish only the
+ProcessCollision entry/exit boundary for exact source tags; it distinguishes
+matrix integration from a velocity impulse and remains diagnostic.
 `--cpp-processcontrol-boundary` enables the matching direct
 `CAutomobile::ProcessControl` entry/exit stream (`.control.bin`), and
 `--cpp-processcontrol-source-window START END` limits it to a source-tagged

@@ -58,6 +58,7 @@ def _native_script(
     one_tick_config: dict[str, Any] | None = None,
     skip_frida_bootstrap: bool = False,
     processwheel_source_window: tuple[int, int] | None = None,
+    processcollision_source_window: tuple[int, int] | None = None,
     writer_diagnostics: bool = True,
     transmission_diagnostics: bool = True,
 ) -> str:
@@ -74,6 +75,7 @@ const SUSPENSION_STAGE_ONLY = {str(suspension_stage_only).lower()};
 const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
 const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
 const PROCESSWHEEL_SOURCE_WINDOW = {json.dumps(list(processwheel_source_window) if processwheel_source_window else None)};
+const PROCESSCOLLISION_SOURCE_WINDOW = {json.dumps(list(processcollision_source_window) if processcollision_source_window else None)};
 const INSTALL_STATE_WRITER_DIAGNOSTICS = {str(writer_diagnostics).lower()};
 const INSTALL_TRANSMISSION_DIAGNOSTICS = {str(transmission_diagnostics).lower()};
 const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":"))};
@@ -939,9 +941,14 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
         // The reduced stage route observes it without installing force or
         // ProcessWheel hooks, so reference-frame integration can be separated
         // from the ProcessControl exit state.
-        if (SUSPENSION_STAGE_ONLY) {{
+        if (SUSPENSION_STAGE_ONLY || Array.isArray(PROCESSCOLLISION_SOURCE_WINDOW)) {{
         Interceptor.attach(processCollision, {{
             onEnter() {{
+                const sourceTag = readNativeSourceTag();
+                if (Array.isArray(PROCESSCOLLISION_SOURCE_WINDOW)
+                    && (sourceTag.frame === null
+                        || sourceTag.frame < PROCESSCOLLISION_SOURCE_WINDOW[0]
+                        || sourceTag.frame > PROCESSCOLLISION_SOURCE_WINDOW[1])) return;
                 if (CAPTURE_FROM_FIRST_GAS && !captureActive) return;
                 const vehicle = this.context.ecx;
                 try {{
@@ -950,7 +957,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                     this.nativeStageProcessCollisionVehicle = vehicle;
                     this.nativeStageProcessCollisionBefore = physicalSnapshot(vehicle);
                     this.nativeStageProcessCollisionBefore.matrix = matrixSnapshot(vehicle);
-                    const tag = readNativeSourceTag();
+                    const tag = sourceTag;
                     this.nativeStageProcessCollisionTagEntry = tag.frame;
                     this.nativeStageProcessCollisionTickEntry = tag.tick;
                 }} catch (_) {{}}
@@ -2070,6 +2077,16 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--frida-processcollision-source-window",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        help=(
+            "capture a narrow Frida ProcessCollision entry/exit boundary for source tags; "
+            "diagnostic only and incompatible with C++/timing routes"
+        ),
+    )
+    parser.add_argument(
         "--frida-processwheel-no-writer-diagnostics",
         action="store_true",
         help=(
@@ -2124,6 +2141,12 @@ def main() -> int:
             parser.error("invalid Frida ProcessWheel source window")
         if args.cpp_hook or args.timing_only or args.suspension_stage_only:
             parser.error("--frida-processwheel-source-window requires the Frida ProcessWheel route")
+    if args.frida_processcollision_source_window:
+        start_frame, end_frame = args.frida_processcollision_source_window
+        if start_frame < 1 or end_frame < start_frame:
+            parser.error("invalid Frida ProcessCollision source window")
+        if args.cpp_hook or args.timing_only:
+            parser.error("--frida-processcollision-source-window requires the Frida route")
     if args.cpp_minimal or args.cpp_no_matrix:
         args.cpp_hook = True
     playback_modes = sum(
@@ -2494,6 +2517,10 @@ def main() -> int:
             list(args.frida_processwheel_source_window)
             if args.frida_processwheel_source_window else None
         ),
+        "processcollision_source_window": (
+            list(args.frida_processcollision_source_window)
+            if args.frida_processcollision_source_window else None
+        ),
         "native_state_writer_diagnostics": bool(
             args.frida_processwheel_source_window
             and not args.frida_processwheel_no_writer_diagnostics
@@ -2634,6 +2661,10 @@ def main() -> int:
             tuple(args.frida_processwheel_source_window)
             if args.frida_processwheel_source_window else None
         ),
+        processcollision_source_window=(
+            tuple(args.frida_processcollision_source_window)
+            if args.frida_processcollision_source_window else None
+        ),
         writer_diagnostics=not args.frida_processwheel_no_writer_diagnostics,
         transmission_diagnostics=not args.frida_processwheel_no_transmission_diagnostics,
     )
@@ -2667,6 +2698,12 @@ def main() -> int:
             + json.dumps(
                 list(args.frida_processwheel_source_window)
                 if args.frida_processwheel_source_window else None
+            )
+            + ";\n"
+            "const PROCESSCOLLISION_SOURCE_WINDOW = "
+            + json.dumps(
+                list(args.frida_processcollision_source_window)
+                if args.frida_processcollision_source_window else None
             )
             + ";\n"
             "const INSTALL_STATE_WRITER_DIAGNOSTICS = "
