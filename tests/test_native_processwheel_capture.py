@@ -220,6 +220,23 @@ def test_source_tag_is_written_after_controls_are_applied():
     assert "after all controls" in source[tag - 400:tag]
 
 
+def test_frida_processwheel_can_pair_lightweight_processsuspension():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "paired-startup",
+        processwheel_source_window=(1, 3),
+        paired_processsuspension=True,
+        writer_diagnostics=False,
+        transmission_diagnostics=False,
+    )
+    assert "const INSTALL_PAIRED_SUSPENSION = true;" in script
+    assert "source:'gta-native-paired-process-suspension'" in script
+    assert "if (INSTALL_PAIRED_SUSPENSION && !INSTALL_COLLISION_DIAGNOSTICS)" in script
+    assert "sourceFrameTagEntry:this.nativePairedSuspensionTag.frame" in script
+    assert "physicalBefore:this.nativePairedSuspensionPhysicalBefore" in script
+
+
 def test_frida_processwheel_source_window_limits_rows_without_disabling_hook():
     tool = _load_tool()
     script = tool._native_script(

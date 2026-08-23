@@ -61,6 +61,7 @@ def _native_script(
     one_tick_config: dict[str, Any] | None = None,
     skip_frida_bootstrap: bool = False,
     processwheel_source_window: tuple[int, int] | None = None,
+    paired_processsuspension: bool = False,
     processcollision_source_window: tuple[int, int] | None = None,
     processsuspension_source_window: tuple[int, int] | None = None,
     writer_diagnostics: bool = True,
@@ -75,6 +76,7 @@ const MTA_DIR = {mta_dir};
 const OUTPUT_LABEL = {_js_string(output_label)};
 const INSTALL_NATIVE_WHEEL_HOOK = {str(install_wheel_hook).lower()};
 const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
+const INSTALL_PAIRED_SUSPENSION = {str(paired_processsuspension).lower()};
 const SUSPENSION_STAGE_ONLY = {str(suspension_stage_only).lower()};
 const STAGE_FORCE_DIAGNOSTICS = {str(stage_force_diagnostics).lower()};
 const STAGE_FORCE_EVENTS = {str(stage_force_events).lower()};
@@ -1160,6 +1162,50 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                     }}
                 }} catch (_) {{}}
                 this.nativeStageProcessCollisionKey = null;
+            }}
+        }});
+        }}
+        // Lightweight paired ProcessSuspension boundary.  Unlike
+        // INSTALL_COLLISION_DIAGNOSTICS this does not install the broad
+        // collision/force observer set; it is intended to answer the
+        // startup ProcessSuspension-versus-ProcessWheel question without
+        // destroying the native timer cadence.
+        if (INSTALL_PAIRED_SUSPENSION && !INSTALL_COLLISION_DIAGNOSTICS) {{
+        Interceptor.attach(processSuspension, {{
+            onEnter() {{
+                const tag = readNativeSourceTag();
+                if (!Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)
+                    || tag.frame === null
+                    || tag.frame < PROCESSWHEEL_SOURCE_WINDOW[0]
+                    || tag.frame > PROCESSWHEEL_SOURCE_WINDOW[1]) return;
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativePairedSuspensionKey = vehicle.toString();
+                    this.nativePairedSuspensionVehicle = vehicle;
+                    this.nativePairedSuspensionBefore = suspensionSnapshot(vehicle);
+                    this.nativePairedSuspensionPhysicalBefore = physicalSnapshot(vehicle);
+                    this.nativePairedSuspensionTag = tag;
+                    this.nativePairedSuspensionTimerStep = f(timerStep);
+                }} catch (_) {{}}
+            }},
+            onLeave() {{
+                const key = this.nativePairedSuspensionKey;
+                if (!key) return;
+                try {{
+                    const control = controlStates.get(key);
+                    if (control) control.suspensionProcess = {{
+                        source:'gta-native-paired-process-suspension',
+                        sourceFrameTagEntry:this.nativePairedSuspensionTag.frame,
+                        sourceTickMsTagEntry:this.nativePairedSuspensionTag.tick,
+                        timerStep:this.nativePairedSuspensionTimerStep,
+                        before:this.nativePairedSuspensionBefore,
+                        after:suspensionSnapshot(this.nativePairedSuspensionVehicle),
+                        physicalBefore:this.nativePairedSuspensionPhysicalBefore,
+                        physicalAfter:physicalSnapshot(this.nativePairedSuspensionVehicle),
+                    }};
+                }} catch (_) {{}}
+                this.nativePairedSuspensionKey = null;
             }}
         }});
         }}
@@ -2270,6 +2316,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--frida-processwheel-with-processsuspension",
+        action="store_true",
+        help=(
+            "pair the bounded Frida ProcessWheel window with a lightweight "
+            "ProcessSuspension boundary; requires --frida-processwheel-source-window"
+        ),
+    )
+    parser.add_argument(
         "--frida-processcollision-source-window",
         type=int,
         nargs=2,
@@ -2390,6 +2444,17 @@ def main() -> int:
             parser.error("--frida-processsuspension-source-window requires the reduced Frida wheel route")
     if args.cpp_minimal or args.cpp_no_matrix:
         args.cpp_hook = True
+    if args.frida_processwheel_with_processsuspension:
+        if not args.frida_processwheel_source_window:
+            parser.error(
+                "--frida-processwheel-with-processsuspension requires "
+                "--frida-processwheel-source-window"
+            )
+        if args.cpp_hook or args.timing_only or args.collision_diagnostics or args.suspension_stage_only:
+            parser.error(
+                "--frida-processwheel-with-processsuspension requires the "
+                "lightweight Frida wheel route without collision diagnostics"
+            )
     playback_modes = sum(
         bool(value) for value in (
             args.controls_only_playback,
@@ -2782,6 +2847,7 @@ def main() -> int:
             list(args.frida_processwheel_source_window)
             if args.frida_processwheel_source_window else None
         ),
+        "paired_processsuspension": bool(args.frida_processwheel_with_processsuspension),
         "processcollision_source_window": (
             list(args.frida_processcollision_source_window)
             if args.frida_processcollision_source_window else None
@@ -2806,6 +2872,9 @@ def main() -> int:
             "ProcessEntityCollision/ProcessSuspension stage snapshots and "
             "ProcessControl matrices"
             if args.suspension_stage_only
+            else "CVehicle::ProcessWheel entry arguments and vehicle state plus "
+            "lightweight ProcessSuspension physical boundary"
+            if args.frida_processwheel_with_processsuspension
             else "CVehicle::ProcessWheel entry arguments and vehicle state"
         ),
         "hook": (
@@ -2947,6 +3016,7 @@ def main() -> int:
             tuple(args.frida_processwheel_source_window)
             if args.frida_processwheel_source_window else None
         ),
+        paired_processsuspension=bool(args.frida_processwheel_with_processsuspension),
         processcollision_source_window=(
             tuple(args.frida_processcollision_source_window)
             if args.frida_processcollision_source_window else None
@@ -2969,6 +3039,7 @@ def main() -> int:
         spec.loader.exec_module(bootstrap_module)
         marker = (
             "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS\n"
+            "    || INSTALL_PAIRED_SUSPENSION\n"
             "    || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)\n"
             "    || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)) {"
         )
@@ -2978,6 +3049,9 @@ def main() -> int:
             + str(not args.suspension_stage_only).lower() + ";\n"
             "const INSTALL_COLLISION_DIAGNOSTICS = "
             + str(args.collision_diagnostics).lower()
+            + ";\n"
+            "const INSTALL_PAIRED_SUSPENSION = "
+            + str(args.frida_processwheel_with_processsuspension).lower()
             + ";\n"
             "const SUSPENSION_STAGE_ONLY = "
             + str(args.suspension_stage_only).lower()

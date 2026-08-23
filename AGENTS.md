@@ -348,7 +348,13 @@ ProcessCollision entry/exit boundary for exact source tags; it distinguishes
 matrix integration from a velocity impulse and remains diagnostic.
 `--frida-processsuspension-source-window START END` similarly publishes only
 a source-tagged ProcessSuspension private compression/contact boundary for
-exact local comparison; it never injects that state.
+exact local comparison; it never injects that state. For the startup causal
+question, `--frida-processwheel-with-processsuspension` pairs a bounded
+`--frida-processwheel-source-window` with only a lightweight read-only
+ProcessSuspension physical boundary; it is mutually exclusive with the broad
+collision observer and remains diagnostic. The accepted local startup
+experiment retained tags 2--3 at timer steps about `0.500035/0.499995` while
+tag 1 was rejected at `0.586040`.
 `--cpp-processcontrol-boundary` enables the matching direct
 `CAutomobile::ProcessControl` entry/exit stream (`.control.bin`), and
 `--cpp-processcontrol-source-window START END` limits it to a source-tagged
