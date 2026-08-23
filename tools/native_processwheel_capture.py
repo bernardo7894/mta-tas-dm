@@ -339,6 +339,23 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
             return null;
         }}
     }};
+    const clientEntityNative411Candidates = entity => {{
+        const candidates = [];
+        if (!entity || entity.isNull()) return candidates;
+        // Read-only ownership diagnostic.  CClientVehicle stores its native
+        // CVehicle pointer in the wrapper, but the wrapper base layout is not
+        // part of the native row ABI.  Scan a bounded object prefix for
+        // pointers whose US-1.0 model word is 411; never use the result as
+        // simulator input.
+        for (let offset = 0; offset <= 0x1000; offset += 4) {{
+            try {{
+                const candidate = entity.add(offset).readPointer();
+                if (!candidate.isNull() && candidate.add(0x22).readU16() === 411)
+                    candidates.push({{offset, pointer:candidate.toString()}});
+            }} catch (_) {{}}
+        }}
+        return candidates;
+    }};
     const physicalSnapshot = vehicle => ({{
         linearVelocity:vec(vehicle.add(0x44)),
         angularVelocity:vec(vehicle.add(0x50)),
@@ -1450,6 +1467,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                                         gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
                                         timerStep:f(timerStep),
                                         clientEntity:entityPtr.toString(),
+                                        clientEntityNative411Candidates:clientEntityNative411Candidates(entityPtr),
                                         velocity:vec(speedPtr),
                                         returnAddress:this.returnAddress.toString(),
                                         callerSymbol:(()=>{{try{{return DebugSymbol.fromAddress(this.returnAddress).toString()}}catch(_){{return null}}}})(),
@@ -1481,6 +1499,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                                 gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
                                 timerStep:f(timerStep),
                                 clientEntity:entityPtr.toString(),
+                                clientEntityNative411Candidates:clientEntityNative411Candidates(entityPtr),
                                 angularVelocity:vec(turnVelocityPtr),
                                 returnAddress:this.returnAddress.toString(),
                                 callerModule:(()=>{{
