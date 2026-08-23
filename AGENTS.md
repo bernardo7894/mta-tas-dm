@@ -377,6 +377,15 @@ remains diagnostic: the latest accepted window reached source tags 25--88 only,
 so it is not complete controls-only trajectory evidence. `--cpp-stage-only` enables the ProcessControl
 and ProcessSuspension boundary streams without installing ProcessWheel; it is
 a lower-overhead causal diagnostic, still subject to the strict timer-step gate.
+The bounded Frida startup provenance option
+`--frida-state-writer-source-window START END --frida-state-writer-capture-untagged`
+adds only a read-only `client_d.dll` hook for
+`CStaticFunctionDefinitions::SetElementAngularVelocity` at local RVA
+`0x7AE0B0`; it records the public setter value and leaves its arguments and
+return untouched. Untagged calls before `GetNativeProcessWheelSourceTagBridge`
+publishes the first tag must remain explicitly untagged and cannot be used as
+exact source-frame rows. This option is for distinguishing the public seed
+from later native startup/private history, not for continuous state injection.
 Convert it with
 `infernus-physics/tools/convert_native_processcontrol_cpp.py` and audit it
 with `infernus-physics/tools/audit_native_processcontrol_boundary.py`. This

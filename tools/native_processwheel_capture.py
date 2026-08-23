@@ -66,6 +66,8 @@ def _native_script(
     processsuspension_source_window: tuple[int, int] | None = None,
     writer_diagnostics: bool = True,
     transmission_diagnostics: bool = True,
+    state_writer_source_window: tuple[int, int] | None = None,
+    capture_untagged_state_writers: bool = False,
 ) -> str:
     bin_dir = _js_string(str(mta_bin))
     mta_dir = _js_string(str(mta_bin / "MTA"))
@@ -86,6 +88,8 @@ const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
 const PROCESSWHEEL_SOURCE_WINDOW = {json.dumps(list(processwheel_source_window) if processwheel_source_window else None)};
 const PROCESSCOLLISION_SOURCE_WINDOW = {json.dumps(list(processcollision_source_window) if processcollision_source_window else None)};
 const PROCESSSUSPENSION_SOURCE_WINDOW = {json.dumps(list(processsuspension_source_window) if processsuspension_source_window else None)};
+const STATE_WRITER_SOURCE_WINDOW = {json.dumps(list(state_writer_source_window) if state_writer_source_window else None)};
+const CAPTURE_UNTAGGED_STATE_WRITERS = {str(capture_untagged_state_writers).lower()};
 const INSTALL_STATE_WRITER_DIAGNOSTICS = {str(writer_diagnostics).lower()};
 const INSTALL_TRANSMISSION_DIAGNOSTICS = {str(transmission_diagnostics).lower()};
 const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":"))};
@@ -215,7 +219,8 @@ try {{
 
 if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
     || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)
-    || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)) {{
+    || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)
+    || Array.isArray(STATE_WRITER_SOURCE_WINDOW)) {{
 (function installNativeWheelHook() {{
     const main = Process.mainModule;
     const processWheel = main.base.add({PROCESS_WHEEL_RVA});
@@ -223,6 +228,10 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
     const setMoveSpeedRva = 0x15BD10;
     const vehicleSetMoveSpeedRva = 0x1DE7B0;
     const staticSetElementVelocityRva = 0x7B0010;
+    // CStaticFunctionDefinitions::SetElementAngularVelocity in the local
+    // Debug client_d.dll.  This is a read-only writer diagnostic: it records
+    // the public TAS setter call and never changes its arguments or return.
+    const staticSetElementAngularVelocityRva = 0x7AE0B0;
     const processControlCollisionCheck = main.base.add(0x2A29C0);
     const processEntityCollision = main.base.add(0x2ACE70);
     const automobileCollisionPoints = main.base.add(0x81BFF8);
@@ -1368,6 +1377,54 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                     }},
                 }});
             }} catch (_) {{}}
+            try {{
+                const angularSetter = clientDll.base.add(staticSetElementAngularVelocityRva);
+                const entryBytes = [0x55, 0x8b, 0xec];
+                for (let i = 0; i < entryBytes.length; i++)
+                    if (angularSetter.add(i).readU8() !== entryBytes[i])
+                        throw new Error('SetElementAngularVelocity signature mismatch at ' + angularSetter);
+                const writerWindow = Array.isArray(STATE_WRITER_SOURCE_WINDOW)
+                    ? STATE_WRITER_SOURCE_WINDOW : PROCESSWHEEL_SOURCE_WINDOW;
+                const writerTagAccepted = sourceTag => {{
+                    if (!Array.isArray(writerWindow)) return false;
+                    if (sourceTag.frame === null || sourceTag.frame < 1)
+                        return CAPTURE_UNTAGGED_STATE_WRITERS;
+                    return sourceTag.frame >= writerWindow[0] && sourceTag.frame <= writerWindow[1];
+                }};
+                Interceptor.attach(angularSetter, {{
+                    onEnter() {{
+                        try {{
+                            const sourceTag = readNativeSourceTag();
+                            if (!writerTagAccepted(sourceTag)) return;
+                            const entityPtr = this.context.esp.add(4).readPointer();
+                            const turnVelocityPtr = this.context.esp.add(8).readPointer();
+                            this.nativeSetElementAngularVelocity = {{
+                                sourceFrameTag:sourceTag.frame,
+                                sourceTickMsTag:sourceTag.tick,
+                                sourceTagWasPublished:sourceTag.frame !== null && sourceTag.frame >= 1,
+                                gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
+                                gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
+                                timerStep:f(timerStep),
+                                clientEntity:entityPtr.toString(),
+                                angularVelocity:vec(turnVelocityPtr),
+                                returnAddress:this.returnAddress.toString(),
+                            }};
+                        }} catch (_) {{}}
+                    }},
+                    onLeave() {{
+                        const record = this.nativeSetElementAngularVelocity;
+                        if (!record || !captureActive) return;
+                        batch.push({{
+                            source:'gta-native-set-element-angular-velocity',
+                            label:OUTPUT_LABEL,
+                            ...record,
+                        }});
+                        if (batch.length >= 32) flush();
+                    }},
+                }});
+            }} catch (error) {{
+                send({{type:'native_hook_error', message:'SetElementAngularVelocity: ' + String(error)}});
+            }}
         }}
     }} catch(e) {{ send({{type:'native_hook_error', message:String(e)}}); }}
     setInterval(flush,100); setInterval(() => send({{type:'native_counts', processCalls, wheelCalls, frame}}),3000);
@@ -2316,6 +2373,24 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--frida-state-writer-source-window",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        help=(
+            "limit the read-only SetElementAngularVelocity writer diagnostic to "
+            "inclusive source tags; use with the Frida route"
+        ),
+    )
+    parser.add_argument(
+        "--frida-state-writer-capture-untagged",
+        action="store_true",
+        help=(
+            "also retain angular-writer calls made before the source-tag bridge "
+            "publishes its first tag; diagnostic provenance is explicitly untagged"
+        ),
+    )
+    parser.add_argument(
         "--frida-processwheel-with-processsuspension",
         action="store_true",
         help=(
@@ -2430,6 +2505,14 @@ def main() -> int:
             parser.error("invalid Frida ProcessWheel source window")
         if args.cpp_hook or args.timing_only or args.suspension_stage_only:
             parser.error("--frida-processwheel-source-window requires the Frida ProcessWheel route")
+    if args.frida_state_writer_source_window:
+        start_frame, end_frame = args.frida_state_writer_source_window
+        if start_frame < 1 or end_frame < start_frame:
+            parser.error("invalid Frida state-writer source window")
+        if args.cpp_hook or args.timing_only:
+            parser.error("--frida-state-writer-source-window requires the Frida route")
+    if args.frida_state_writer_capture_untagged and not args.frida_state_writer_source_window:
+        parser.error("--frida-state-writer-capture-untagged requires --frida-state-writer-source-window")
     if args.frida_processcollision_source_window:
         start_frame, end_frame = args.frida_processcollision_source_window
         if start_frame < 1 or end_frame < start_frame:
@@ -2847,6 +2930,12 @@ def main() -> int:
             list(args.frida_processwheel_source_window)
             if args.frida_processwheel_source_window else None
         ),
+        "state_writer_source_window": (
+            list(args.frida_state_writer_source_window)
+            if args.frida_state_writer_source_window else None
+        ),
+        "capture_untagged_state_writers": bool(args.frida_state_writer_capture_untagged),
+        "angular_writer_rva_client_dll": hex(0x7AE0B0),
         "paired_processsuspension": bool(args.frida_processwheel_with_processsuspension),
         "processcollision_source_window": (
             list(args.frida_processcollision_source_window)
@@ -2857,7 +2946,7 @@ def main() -> int:
             if args.frida_processsuspension_source_window else None
         ),
         "native_state_writer_diagnostics": bool(
-            args.frida_processwheel_source_window
+            (args.frida_processwheel_source_window or args.frida_state_writer_source_window)
             and not args.frida_processwheel_no_writer_diagnostics
         ),
         "native_transmission_diagnostics": not args.frida_processwheel_no_transmission_diagnostics,
@@ -3027,6 +3116,11 @@ def main() -> int:
         ),
         writer_diagnostics=not args.frida_processwheel_no_writer_diagnostics,
         transmission_diagnostics=not args.frida_processwheel_no_transmission_diagnostics,
+        state_writer_source_window=(
+            tuple(args.frida_state_writer_source_window)
+            if args.frida_state_writer_source_window else None
+        ),
+        capture_untagged_state_writers=bool(args.frida_state_writer_capture_untagged),
     )
     if args.orchestrator and not (args.cpp_hook or args.timing_only):
         if not args.orchestrator.exists():
@@ -3041,7 +3135,8 @@ def main() -> int:
             "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS\n"
             "    || INSTALL_PAIRED_SUSPENSION\n"
             "    || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)\n"
-            "    || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)) {"
+            "    || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)\n"
+            "    || Array.isArray(STATE_WRITER_SOURCE_WINDOW)) {"
         )
         native_only = (
             "const OUTPUT_LABEL = " + json.dumps(args.label) + ";\n"
@@ -3091,6 +3186,15 @@ def main() -> int:
                 list(args.frida_processsuspension_source_window)
                 if args.frida_processsuspension_source_window else None
             )
+            + ";\n"
+            "const STATE_WRITER_SOURCE_WINDOW = "
+            + json.dumps(
+                list(args.frida_state_writer_source_window)
+                if args.frida_state_writer_source_window else None
+            )
+            + ";\n"
+            "const CAPTURE_UNTAGGED_STATE_WRITERS = "
+            + str(args.frida_state_writer_capture_untagged).lower()
             + ";\n"
             "const INSTALL_STATE_WRITER_DIAGNOSTICS = "
             + str(not args.frida_processwheel_no_writer_diagnostics).lower()

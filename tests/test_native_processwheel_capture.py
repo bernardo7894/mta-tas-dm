@@ -237,6 +237,26 @@ def test_frida_processwheel_can_pair_lightweight_processsuspension():
     assert "physicalBefore:this.nativePairedSuspensionPhysicalBefore" in script
 
 
+def test_frida_angular_state_writer_diagnostic_is_bounded_and_read_only():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "angular-writer-window",
+        install_wheel_hook=False,
+        state_writer_source_window=(1, 3),
+        capture_untagged_state_writers=True,
+        writer_diagnostics=True,
+        transmission_diagnostics=False,
+    )
+    assert "const STATE_WRITER_SOURCE_WINDOW = [1, 3];" in script
+    assert "const CAPTURE_UNTAGGED_STATE_WRITERS = true;" in script
+    assert "staticSetElementAngularVelocityRva = 0x7AE0B0" in script
+    assert "source:'gta-native-set-element-angular-velocity'" in script
+    assert "sourceTagWasPublished" in script
+    assert "SetElementAngularVelocity signature mismatch" in script
+    assert "turnVelocityPtr = this.context.esp.add(8).readPointer()" in script
+
+
 def test_frida_processwheel_source_window_limits_rows_without_disabling_hook():
     tool = _load_tool()
     script = tool._native_script(
@@ -299,6 +319,22 @@ def test_frida_processwheel_can_skip_transmission_boundary_hook():
     )
     assert "const INSTALL_TRANSMISSION_DIAGNOSTICS = false;" in script
     assert "if (INSTALL_TRANSMISSION_DIAGNOSTICS)" in script
+
+
+def test_suspension_stage_can_pair_public_angular_writer_diagnostic():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "stage-writer",
+        install_wheel_hook=False,
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+        state_writer_source_window=(1, 3),
+        capture_untagged_state_writers=True,
+    )
+    assert "const STATE_WRITER_SOURCE_WINDOW = [1, 3];" in script
+    assert "source:'gta-native-process-stage'" in script
+    assert "source:'gta-native-set-element-angular-velocity'" in script
 
 
 def test_suspension_stage_only_omits_wheel_hook_but_keeps_stage_hooks():
