@@ -196,6 +196,14 @@ The v19 run captured one untagged `timerStep=3.0` row immediately before tag 1,
 confirming the rejected native ProcessControl startup tick. Rejected rows are
 still explicitly excluded from acceptance and cannot be replayed.
 
+To join that boundary through the lower-overhead C++ route, use
+`--cpp-stage-only --cpp-public-angular-writer`. The C++ wrapper remains the
+only ProcessControl/ProcessSuspension observer; the added Frida script hooks
+only the named public angular setter and named native SetTurnSpeed functions.
+It records no private state and installs no Frida ProcessControl/collision hook.
+The v23 same-run audit confirms the exact setter-to-C++ pointer join and the
+following rejected `timerStep=3.0` tick; this route is diagnostic-only.
+
 The `bVehicleColProcessed` bit is byte `0x42B`, bit 0. The hook records
 `CTimer::GetTimeStep` at `0x77CB5C`; pass that observed multiplier to
 `tools/run_one_tick_simulator.py --native-timer-step`, and pass the same config

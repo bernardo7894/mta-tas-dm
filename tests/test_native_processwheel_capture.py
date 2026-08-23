@@ -586,6 +586,21 @@ def test_cpp_stage_only_selects_boundary_observers_without_wheel_output():
     assert 'not args.cpp_stage_only' in source
 
 
+def test_cpp_stage_public_angular_route_is_minimal_and_does_not_hook_processcontrol():
+    tool = _load_tool()
+    script = tool._cpp_public_angular_writer_script("cpp-stage-public-angular")
+    assert "0x7AE0B0" in script
+    assert "gta-native-set-element-angular-velocity-cpp-stage-join" in script
+    assert "GetNativeProcessWheelSourceTagBridge" in script
+    assert "nativeCandidates" in script
+    assert "CVehicleSA::SetTurnSpeed" in script
+    assert "CPhysicalSA::SetTurnSpeed" in script
+    assert "gta-native-set-turn-speed-cpp-stage-join" in script
+    assert "Interceptor.attach(address" in script
+    assert "PROCESS_CONTROL_RVA" not in script
+    assert "Interceptor.attach(processControl" not in script
+
+
 def test_cpp_processcontrol_boundary_source_window_is_explicit_diagnostic():
     source = TOOL.read_text(encoding="utf-8")
     assert '"--cpp-processcontrol-boundary"' in source

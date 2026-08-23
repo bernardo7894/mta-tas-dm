@@ -1870,6 +1870,148 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
 """
 
 
+def _cpp_public_angular_writer_script(output_label: str) -> str:
+    """Install only the read-only public angular setter observer.
+
+    The C++ stage route owns ProcessControl/ProcessSuspension.  This tiny
+    Frida side channel is deliberately limited to the named client_d.dll
+    public setter so the same run can join the public seed to the lower-overhead
+    C++ ProcessControl stream without installing a Frida ProcessControl hook.
+    """
+    return f"""
+(function installCppStagePublicAngularObserver() {{
+'use strict';
+const OUTPUT_LABEL = {json.dumps(output_label)};
+const main = Process.mainModule;
+const clientDll = Process.findModuleByName('client_d.dll');
+const multiplayer = Process.findModuleByName('multiplayer_sa_d.dll');
+const angularSetterRva = 0x7AE0B0;
+const timerStep = main.base.add(0x77CB5C);
+const gameFrame = main.base.add(0x77CB4C);
+const gameTimeMs = main.base.add(0x77CB84);
+let sourceTagGetter = null;
+let captured = 0;
+let turnCaptured = 0;
+let publicAngularWriterInProgress = false;
+const f = p => {{ try {{ return p.readFloat(); }} catch (_) {{ return null; }} }};
+const vec = p => {{
+    try {{ return [p.readFloat(), p.add(4).readFloat(), p.add(8).readFloat()]; }}
+    catch (_) {{ return null; }}
+}};
+const sourceTag = () => {{
+    try {{
+        if (!sourceTagGetter) {{
+            const address = multiplayer && multiplayer.findExportByName('GetNativeProcessWheelSourceTagBridge');
+            if (!address) return {{frame:null, tick:null}};
+            sourceTagGetter = new NativeFunction(address, 'void', ['pointer', 'pointer']);
+        }}
+        const frame = Memory.alloc(4), tick = Memory.alloc(4);
+        sourceTagGetter(frame, tick);
+        return {{frame:frame.readS32(), tick:tick.readS32()}};
+    }} catch (_) {{ sourceTagGetter = null; return {{frame:null, tick:null}}; }}
+}};
+const nativeCandidates = entity => {{
+    const result = [], seen = new Set();
+    if (!entity || entity.isNull()) return result;
+    for (let offset = -0x2000; offset <= 0x3000; offset += 4) {{
+        try {{
+            const pointer = entity.add(offset).readPointer();
+            if (pointer.isNull() || seen.has(pointer.toString())) continue;
+            if (pointer.add(0x22).readU16() !== 411) continue;
+            seen.add(pointer.toString());
+            result.push({{offset, pointer:pointer.toString()}});
+        }} catch (_) {{}}
+    }}
+    return result;
+}};
+try {{
+    if (!clientDll) throw new Error('client_d.dll not loaded');
+    const address = clientDll.base.add(angularSetterRva);
+    if (address.readU8() !== 0x55 || address.add(1).readU8() !== 0x8b
+        || address.add(2).readU8() !== 0xec)
+        throw new Error('SetElementAngularVelocity signature mismatch at ' + address);
+    Interceptor.attach(address, {{
+        onEnter() {{
+            if (captured >= 8) return;
+            try {{
+                const entity = this.context.esp.add(4).readPointer();
+                const turnVelocity = this.context.esp.add(8).readPointer();
+                const tag = sourceTag();
+                publicAngularWriterInProgress = true;
+                this.record = {{
+                    source:'gta-native-set-element-angular-velocity-cpp-stage-join',
+                    label:OUTPUT_LABEL,
+                    sourceFrameTag:tag.frame,
+                    sourceTickMsTag:tag.tick,
+                    sourceTagWasPublished:tag.frame !== null && tag.frame >= 1,
+                    gameFrame:gameFrame.readU32(),
+                    gameTimeMs:gameTimeMs.readU32(),
+                    timerStep:f(timerStep),
+                    clientEntity:entity.toString(),
+                    clientEntityNative411Candidates:nativeCandidates(entity),
+                    angularVelocity:vec(turnVelocity),
+                    captureProvenance:'minimal-Frida-public-angular-only-with-C++-stage',
+                }};
+            }} catch (_) {{ this.record = null; }}
+        }},
+        onLeave() {{
+            publicAngularWriterInProgress = false;
+            if (!this.record || captured >= 8) return;
+            captured++;
+            send({{type:'native_batch', label:OUTPUT_LABEL, records:[this.record]}});
+        }},
+    }});
+    try {{
+        const turnTargets = [];
+        for (const name of ['CVehicleSA::SetTurnSpeed', 'CPhysicalSA::SetTurnSpeed']) {{
+            for (const target of (DebugSymbol.findFunctionsNamed(name) || []))
+                if (!turnTargets.some(item => item.address.equals(target)))
+                    turnTargets.push({{name, address:target}});
+        }}
+        if (!turnTargets.length)
+            throw new Error('named SetTurnSpeed symbols not found');
+        for (const target of turnTargets) {{
+            Interceptor.attach(target.address, {{
+                onEnter() {{
+                    if (!publicAngularWriterInProgress || turnCaptured >= 8) return;
+                    try {{
+                        const vehicle = this.context.ecx;
+                        const tag = sourceTag();
+                        const speed = this.context.esp.add(4).readPointer();
+                        this.turnRecord = {{
+                            source:'gta-native-set-turn-speed-cpp-stage-join',
+                            label:OUTPUT_LABEL,
+                            target:target.name,
+                            sourceFrameTag:tag.frame,
+                            sourceTickMsTag:tag.tick,
+                            sourceTagWasPublished:tag.frame !== null && tag.frame >= 1,
+                            gameFrame:gameFrame.readU32(),
+                            gameTimeMs:gameTimeMs.readU32(),
+                            timerStep:f(timerStep),
+                            nativeVehicle:vehicle.toString(),
+                            wrapperNative411Candidates:nativeCandidates(vehicle),
+                            turnSpeed:vec(speed),
+                            captureProvenance:'minimal-Frida-named-native-setter-only-with-C++-stage',
+                        }};
+                    }} catch (_) {{ this.turnRecord = null; }}
+                }},
+                onLeave() {{
+                    if (!this.turnRecord || turnCaptured >= 8) return;
+                    turnCaptured++;
+                    send({{type:'native_batch', label:OUTPUT_LABEL, records:[this.turnRecord]}});
+                }},
+            }});
+        }}
+    }} catch (error) {{
+        send({{type:'native_hook_error', message:'C++ stage named SetTurnSpeed observer: ' + String(error)}});
+    }}
+}} catch (error) {{
+    send({{type:'native_hook_error', message:'C++ stage public angular observer: ' + String(error)}});
+}}
+}})();
+"""
+
+
 def _timing_probe_script() -> str:
     return """
 (function installNativeTimingProbe() {
@@ -2739,6 +2881,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--cpp-public-angular-writer",
+        action="store_true",
+        help=(
+            "with --cpp-stage-only, add only a bounded Frida observer for the named "
+            "client_d.dll public angular setter so it can join the C++ stage stream"
+        ),
+    )
+    parser.add_argument(
         "--cpp-minimal",
         action="store_true",
         help=(
@@ -3021,6 +3171,10 @@ def main() -> int:
         args.cpp_hook = True
         args.cpp_processcontrol_boundary = True
         args.cpp_processsuspension_boundary = True
+    if args.cpp_public_angular_writer and not args.cpp_stage_only:
+        parser.error("--cpp-public-angular-writer requires --cpp-stage-only")
+    if args.cpp_public_angular_writer and not args.launcher_exe:
+        parser.error("--cpp-public-angular-writer requires the normal --launcher-exe path")
     if args.frida_processwheel_source_window:
         start_frame, end_frame = args.frida_processwheel_source_window
         if start_frame < 1 or end_frame < start_frame:
@@ -3592,7 +3746,10 @@ def main() -> int:
         ),
         "install_wheel_hook": not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
         "direct_observable": (
-            "CAutomobile ProcessControlCollisionCheck/ProcessCollision/"
+            "C++ ProcessControl/ProcessSuspension boundaries plus bounded public "
+            "angular setter observer"
+            if args.cpp_public_angular_writer
+            else "CAutomobile ProcessControlCollisionCheck/ProcessCollision/"
             "ProcessEntityCollision/ProcessSuspension stage snapshots and "
             "ProcessControl matrices"
             if args.suspension_stage_only
@@ -3602,7 +3759,9 @@ def main() -> int:
             else "CVehicle::ProcessWheel entry arguments and vehicle state"
         ),
         "hook": (
-            "mtasa-blue C++ minimal call-site wrapper"
+            "mtasa-blue C++ stage wrapper + minimal Frida public angular observer"
+            if args.cpp_public_angular_writer
+            else "mtasa-blue C++ minimal call-site wrapper"
             if args.cpp_minimal
             else "mtasa-blue C++ no-matrix call-site wrapper"
             if args.cpp_no_matrix
@@ -3624,6 +3783,11 @@ def main() -> int:
         ),
         "cpp_processcontrol_boundary": bool(args.cpp_processcontrol_boundary),
         "cpp_processsuspension_boundary": bool(args.cpp_processsuspension_boundary),
+        "cpp_public_angular_writer": bool(args.cpp_public_angular_writer),
+        "cpp_public_angular_writer_route": (
+            "minimal-Frida-public-angular-only-with-C++-stage"
+            if args.cpp_public_angular_writer else "none"
+        ),
         "cpp_processcontrol_source_window": (
             list(args.cpp_processcontrol_source_window)
             if args.cpp_processcontrol_source_window else None
@@ -3910,6 +4074,8 @@ def main() -> int:
         # the Frida wheel route, but it can stall the client before the TAS
         # resource starts when combined with the lower-overhead C++ hook.  The
         # self-contained bootstrap above is sufficient for these routes.
+        if args.cpp_public_angular_writer:
+            native_script += "\n" + _cpp_public_angular_writer_script(args.label)
         native_script += "\n" + _timing_probe_script()
     script = session.create_script(native_script)
     script.on("message", on_message)
