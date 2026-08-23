@@ -410,6 +410,10 @@ def test_reduced_stage_probe_keeps_collision_check_and_matrix_boundaries():
         suspension_stage_only=True,
     )
     assert "const matrixSnapshot" in script
+    assert "position:control.position" in script
+    assert "frictionAngularVelocity:control.frictionAngularVelocity" in script
+    assert "force:control.force" in script
+    assert "torque:control.torque" in script
     assert "matrix:control.matrix" in script
     assert "collisionCheck:control.collisionCheck" in script
     assert "nativeStageCollisionKey" in script
