@@ -63,6 +63,9 @@ def _native_script(
     processwheel_source_window: tuple[int, int] | None = None,
     paired_processsuspension: bool = False,
     processcollision_source_window: tuple[int, int] | None = None,
+    capture_untagged_processcollision_before_source: bool = False,
+    capture_untagged_processcollision_after_writer: bool = False,
+    untagged_processcollision_min_game_time_ms: int | None = None,
     processsuspension_source_window: tuple[int, int] | None = None,
     writer_diagnostics: bool = True,
     transmission_diagnostics: bool = True,
@@ -70,6 +73,7 @@ def _native_script(
     capture_untagged_state_writers: bool = False,
     source_tag_order_diagnostics: bool = False,
     capture_untagged_processwheel_after_writer: bool = False,
+    capture_untagged_native_setters_after_writer: bool = False,
 ) -> str:
     bin_dir = _js_string(str(mta_bin))
     mta_dir = _js_string(str(mta_bin / "MTA"))
@@ -89,11 +93,15 @@ const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
 const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
 const PROCESSWHEEL_SOURCE_WINDOW = {json.dumps(list(processwheel_source_window) if processwheel_source_window else None)};
 const PROCESSCOLLISION_SOURCE_WINDOW = {json.dumps(list(processcollision_source_window) if processcollision_source_window else None)};
+const CAPTURE_UNTAGGED_PROCESSCOLLISION_BEFORE_SOURCE = {str(capture_untagged_processcollision_before_source).lower()};
+const CAPTURE_UNTAGGED_PROCESSCOLLISION_AFTER_WRITER = {str(capture_untagged_processcollision_after_writer).lower()};
+const UNTAGGED_PROCESSCOLLISION_MIN_GAME_TIME_MS = {json.dumps(untagged_processcollision_min_game_time_ms)};
 const PROCESSSUSPENSION_SOURCE_WINDOW = {json.dumps(list(processsuspension_source_window) if processsuspension_source_window else None)};
 const STATE_WRITER_SOURCE_WINDOW = {json.dumps(list(state_writer_source_window) if state_writer_source_window else None)};
 const CAPTURE_UNTAGGED_STATE_WRITERS = {str(capture_untagged_state_writers).lower()};
 const INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS = {str(source_tag_order_diagnostics).lower()};
 const CAPTURE_UNTAGGED_PROCESSWHEEL_AFTER_WRITER = {str(capture_untagged_processwheel_after_writer).lower()};
+const CAPTURE_UNTAGGED_NATIVE_SETTERS_AFTER_WRITER = {str(capture_untagged_native_setters_after_writer).lower()};
 const INSTALL_STATE_WRITER_DIAGNOSTICS = {str(writer_diagnostics).lower()};
 const INSTALL_TRANSMISSION_DIAGNOSTICS = {str(transmission_diagnostics).lower()};
 const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":"))};
@@ -259,8 +267,13 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
     let sourceTagBridgeEvents = [];
     let captureActive = !CAPTURE_FROM_FIRST_GAS;
     let publicAngularWriterObserved = false;
+    let publicVelocityWriterObserved = false;
+    let publicVelocityWriterClientEntity = null;
     let postWriterUntaggedWheelCalls = 0;
+    let postWriterUntaggedNativeSetterCalls = 0;
     let postWriterUntaggedSuspensionCaptured = false;
+    let untaggedProcessCollisionBeforeSourceCount = 0;
+    const maxUntaggedProcessCollisionBeforeSource = 8;
     const preCaptureRecords = [];
     const maxPreCaptureRecords = 512;
     let oneTickInjected = false;
@@ -307,6 +320,11 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
         && publicAngularWriterObserved
         && sourceTagIsUntagged(tag)
         && !postWriterUntaggedSuspensionCaptured;
+    const allowUntaggedProcessCollisionAfterWriter = tag =>
+        CAPTURE_UNTAGGED_PROCESSCOLLISION_AFTER_WRITER
+        && publicAngularWriterObserved
+        && sourceTagIsUntagged(tag)
+        && untaggedProcessCollisionBeforeSourceCount < maxUntaggedProcessCollisionBeforeSource;
     const dot = (a,b) => a && b ? a[0]*b[0]+a[1]*b[1]+a[2]*b[2] : null;
     const delta = (a,b) => a && b ? a.map((v,i) => v-b[i]) : null;
     const suspensionSnapshot = vehicle => ({{
@@ -367,7 +385,12 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
         // part of the native row ABI.  Scan a bounded object prefix for
         // pointers whose US-1.0 model word is 411; never use the result as
         // simulator input.
-        for (let offset = 0; offset <= 0x1000; offset += 4) {{
+        // CClientEntity may be an interior subobject of CClientVehicle and
+        // the native pointer can therefore lie before the adjusted wrapper
+        // pointer; the concrete class also exceeds the original 0x1000 scan
+        // prefix in some Debug builds.  This remains a bounded read-only
+        // ownership probe, never simulator input.
+        for (let offset = -0x2000; offset <= 0x3000; offset += 4) {{
             try {{
                 const candidate = entity.add(offset).readPointer();
                 if (!candidate.isNull() && candidate.add(0x22).readU16() === 411)
@@ -1190,7 +1213,19 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
         Interceptor.attach(processCollision, {{
             onEnter() {{
                 const sourceTag = readNativeSourceTag();
+                const captureUntaggedBeforeSource =
+                    CAPTURE_UNTAGGED_PROCESSCOLLISION_BEFORE_SOURCE
+                    && Array.isArray(PROCESSCOLLISION_SOURCE_WINDOW)
+                    && sourceTagIsUntagged(sourceTag)
+                    && (UNTAGGED_PROCESSCOLLISION_MIN_GAME_TIME_MS === null
+                        || gameTimeMs.readU32() >= UNTAGGED_PROCESSCOLLISION_MIN_GAME_TIME_MS)
+                    && untaggedProcessCollisionBeforeSourceCount < maxUntaggedProcessCollisionBeforeSource;
+                const captureUntaggedAfterWriter =
+                    allowUntaggedProcessCollisionAfterWriter(sourceTag)
+                    && Array.isArray(PROCESSCOLLISION_SOURCE_WINDOW);
+                const captureUntaggedProcessCollision = captureUntaggedBeforeSource || captureUntaggedAfterWriter;
                 if (Array.isArray(PROCESSCOLLISION_SOURCE_WINDOW)
+                    && !captureUntaggedProcessCollision
                     && (sourceTag.frame === null
                         || sourceTag.frame < PROCESSCOLLISION_SOURCE_WINDOW[0]
                         || sourceTag.frame > PROCESSCOLLISION_SOURCE_WINDOW[1])) return;
@@ -1202,9 +1237,21 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                     this.nativeStageProcessCollisionVehicle = vehicle;
                     this.nativeStageProcessCollisionBefore = physicalSnapshot(vehicle);
                     this.nativeStageProcessCollisionBefore.matrix = matrixSnapshot(vehicle);
+                    // Read-only private-state snapshot at the post-ProcessControl
+                    // collision boundary. This distinguishes a collision-loop
+                    // initializer from the later ProcessSuspension call.
+                    this.nativeStageProcessCollisionBeforeSuspension = suspensionSnapshot(vehicle);
+                    this.nativeStageProcessCollisionBeforeAutomobileCollisionPoints = colPointArray(automobileCollisionPoints, 12);
                     const tag = sourceTag;
                     this.nativeStageProcessCollisionTagEntry = tag.frame;
                     this.nativeStageProcessCollisionTickEntry = tag.tick;
+                    this.nativeStageProcessCollisionCaptureProvenance = captureUntaggedAfterWriter
+                        ? 'untagged-after-public-angular-writer'
+                        : captureUntaggedBeforeSource
+                            ? 'untagged-before-source-tag'
+                            : 'published-source-tag-window';
+                    if (captureUntaggedProcessCollision)
+                        untaggedProcessCollisionBeforeSourceCount++;
                 }} catch (_) {{}}
             }},
             onLeave() {{
@@ -1215,14 +1262,21 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                     if (control) {{
                         const after = physicalSnapshot(this.nativeStageProcessCollisionVehicle);
                         after.matrix = matrixSnapshot(this.nativeStageProcessCollisionVehicle);
+                        const afterSuspension = suspensionSnapshot(this.nativeStageProcessCollisionVehicle);
+                        const afterAutomobileCollisionPoints = colPointArray(automobileCollisionPoints, 12);
                         const tag = readNativeSourceTag();
                         const boundary = {{
                             sourceFrameTagEntry:this.nativeStageProcessCollisionTagEntry,
                             sourceTickMsTagEntry:this.nativeStageProcessCollisionTickEntry,
                             sourceFrameTagExit:tag.frame,
                             sourceTickMsTagExit:tag.tick,
+                            captureProvenance:this.nativeStageProcessCollisionCaptureProvenance,
                             before:this.nativeStageProcessCollisionBefore,
                             after:after,
+                            suspensionBefore:this.nativeStageProcessCollisionBeforeSuspension,
+                            suspensionAfter:afterSuspension,
+                            automobileCollisionPointsBefore:this.nativeStageProcessCollisionBeforeAutomobileCollisionPoints,
+                            automobileCollisionPointsAfter:afterAutomobileCollisionPoints,
                         }};
                         control.processCollisionBoundaries.push(boundary);
                         // ProcessCollision runs after ProcessControl has
@@ -1237,6 +1291,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                                 sourceTickMsTagEntry:boundary.sourceTickMsTagEntry,
                                 sourceFrameTagExit:boundary.sourceFrameTagExit,
                                 sourceTickMsTagExit:boundary.sourceTickMsTagExit,
+                                captureProvenance:boundary.captureProvenance,
                                 gameFrame:gameFrameCounter.readU32(),
                                 gameTimeMs:gameTimeMs.readU32(),
                                 vehicle:key,
@@ -1373,7 +1428,9 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
             }}
         }});
         }}
-        if (INSTALL_STATE_WRITER_DIAGNOSTICS && Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)) {{
+        if (INSTALL_STATE_WRITER_DIAGNOSTICS
+            && (Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)
+                || CAPTURE_UNTAGGED_NATIVE_SETTERS_AFTER_WRITER)) {{
             const gameSa = Process.findModuleByName('game_sa_d.dll');
             if (gameSa) {{
                 const setMoveSpeedTargets = [
@@ -1386,18 +1443,34 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                             onEnter() {{
                                 try {{
                                     const sourceTag = readNativeSourceTag();
-                                    if (sourceTag.frame === null
-                                        || sourceTag.frame < PROCESSWHEEL_SOURCE_WINDOW[0]
-                                        || sourceTag.frame > PROCESSWHEEL_SOURCE_WINDOW[1]) return;
+                                    const taggedNativeSetter = Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)
+                                        && sourceTag.frame !== null
+                                        && sourceTag.frame >= PROCESSWHEEL_SOURCE_WINDOW[0]
+                                        && sourceTag.frame <= PROCESSWHEEL_SOURCE_WINDOW[1];
+                                    const untaggedNativeSetter = CAPTURE_UNTAGGED_NATIVE_SETTERS_AFTER_WRITER
+                                        && (publicVelocityWriterObserved || publicAngularWriterObserved)
+                                        && sourceTagIsUntagged(sourceTag)
+                                        && postWriterUntaggedNativeSetterCalls < 16;
+                                    if (!taggedNativeSetter && !untaggedNativeSetter) return;
+                                    if (untaggedNativeSetter) postWriterUntaggedNativeSetterCalls++;
                                     const speedPtr = this.context.esp.add(4).readPointer();
                                     this.nativeSetMoveSpeedRecord = {{
                                         target:target[0],
                                         sourceFrameTag:sourceTag.frame,
                                         sourceTickMsTag:sourceTag.tick,
+                                        sourceTagWasPublished:!sourceTagIsUntagged(sourceTag),
+                                        captureProvenance:untaggedNativeSetter
+                                            ? (publicVelocityWriterObserved && !publicAngularWriterObserved
+                                                ? 'untagged-after-public-velocity-writer'
+                                                : 'untagged-after-public-angular-writer')
+                                            : 'published-source-tag-window',
+                                        publicWriterClientEntity:publicVelocityWriterClientEntity,
                                         gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
                                         gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
                                         timerStep:f(timerStep),
                                         wrapper:this.context.ecx.toString(),
+                                        nativeVehicle:this.context.ecx.toString(),
+                                        wrapperNative411Candidates:clientEntityNative411Candidates(this.context.ecx),
                                         speed:vec(speedPtr),
                                         returnAddress:this.returnAddress.toString(),
                                     }};
@@ -1418,6 +1491,64 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
             }}
         }}
         const clientDll = Process.findModuleByName('client_d.dll');
+        if (CAPTURE_UNTAGGED_NATIVE_SETTERS_AFTER_WRITER && clientDll) {{
+            // CPoolsSA::AddVehicle is the source-backed cache/Create handoff
+            // boundary.  Resolve only this named PDB symbol; do not enumerate
+            // the complete client symbol table (that stalls Frida script load
+            // in the Debug build).  The hook is read-only and bounded.
+            try {{
+                const addVehicleTargets = DebugSymbol.findFunctionsNamed('CPoolsSA::AddVehicle') || [];
+                if (!addVehicleTargets.length)
+                    throw new Error('CPoolsSA::AddVehicle Debug symbol not found');
+                let addVehicleRows = 0;
+                for (const address of addVehicleTargets) {{
+                    Interceptor.attach(address, {{
+                        onEnter() {{
+                            if (addVehicleRows >= 8) return;
+                            try {{
+                                const model = this.context.esp.add(8).readU16();
+                                if (model !== 411) return;
+                                const tag = readNativeSourceTag();
+                                this.nativePoolsAddVehicle = {{
+                                    source:'gta-native-pools-add-vehicle',
+                                    label:OUTPUT_LABEL,
+                                    sourceFrameTag:tag.frame,
+                                    sourceTickMsTag:tag.tick,
+                                    sourceTagWasPublished:!sourceTagIsUntagged(tag),
+                                    captureProvenance:'source-CPoolsSA::AddVehicle',
+                                    gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
+                                    gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
+                                    timerStep:f(timerStep),
+                                    clientEntity:this.context.esp.add(4).readPointer().toString(),
+                                    model,
+                                    addVehicleAddress:address.toString(),
+                                }};
+                            }} catch (_) {{ this.nativePoolsAddVehicle = null; }}
+                        }},
+                        onLeave(returnValue) {{
+                            const record = this.nativePoolsAddVehicle;
+                            if (!record || addVehicleRows >= 8 || !captureActive) return;
+                            addVehicleRows++;
+                            let returnedWrapperNative411Candidates = [];
+                            try {{
+                                if (!returnValue.isNull())
+                                    returnedWrapperNative411Candidates = clientEntityNative411Candidates(returnValue);
+                            }} catch (_) {{}}
+                            batch.push({{
+                                source:record.source,
+                                label:record.label,
+                                ...record,
+                                returnedWrapper:returnValue.toString(),
+                                returnedWrapperNative411Candidates,
+                            }});
+                            if (batch.length >= 32) flush();
+                        }},
+                    }});
+                }}
+            }} catch (error) {{
+                send({{type:'native_hook_error', message:'CPoolsSA::AddVehicle handoff: ' + String(error)}});
+            }}
+        }}
         if (clientDll) {{
             try {{
                 Interceptor.attach(clientDll.base.add(staticSetElementVelocityRva), {{
@@ -1476,6 +1607,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                                     if (!writerTagAccepted(sourceTag)) return;
                                     const entityPtr = this.context.esp.add(4).readPointer();
                                     const speedPtr = this.context.esp.add(8).readPointer();
+                                    publicVelocityWriterObserved = true;
+                                    publicVelocityWriterClientEntity = entityPtr.toString();
                                     this.nativePublicInitializerVelocity = {{
                                         source:'gta-native-set-element-velocity-public-initializer',
                                         label:OUTPUT_LABEL,
@@ -1590,13 +1723,23 @@ def _timing_probe_script() -> str:
 """
 
 
+def _process_stem(name: str) -> str:
+    return Path(name).stem.lower()
+
+
+def _is_gta_process_name(name: str) -> bool:
+    return _process_stem(name) in {"gta_sa", "gta-sa", "gta_sa_d", "gta-sa_d"}
+
+
 def _kill_targets() -> None:
+    target_names = {
+        "mta server_d.exe", "mta server.exe", "multi theft auto_d.exe",
+        "multi theft auto.exe", "mtasa.exe", "frida-helper32.exe",
+        "frida-helper.exe",
+    }
     for process in psutil.process_iter(["name"]):
-        if (process.info["name"] or "").lower() in {
-            "gta_sa.exe", "gta-sa.exe", "mta server_d.exe", "mta server.exe",
-            "multi theft auto_d.exe", "multi theft auto.exe", "mtasa.exe",
-            "frida-helper32.exe", "frida-helper.exe"
-        }:
+        name = process.info["name"] or ""
+        if name.lower() in target_names or _is_gta_process_name(name):
             try:
                 process.kill()
             except psutil.Error:
@@ -1789,9 +1932,10 @@ def _prepare_controls_only_playback(mta_bin: Path) -> Any:
     # that is compatible with controls-only playback.  Do not abort the whole
     # preparation merely because that default differs from the repository copy.
     use_only_old, use_only_new = markers[0]
-    if use_only_old not in patched:
-        raise RuntimeError("controls-only TAS preparation could not find useOnlyBinds=false")
-    patched = patched.replace(use_only_old, use_only_new, 1)
+    if use_only_old in patched:
+        patched = patched.replace(use_only_old, use_only_new, 1)
+    elif use_only_new not in patched:
+        raise RuntimeError("controls-only TAS preparation could not find useOnlyBinds setting")
     interpolation_old, interpolation_new = markers[1]
     if interpolation_old in patched:
         patched = patched.replace(interpolation_old, interpolation_new, 1)
@@ -2546,6 +2690,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--frida-native-setter-capture-untagged-after-writer",
+        action="store_true",
+        help=(
+            "retain at most the first sixteen untagged native SetMoveSpeed calls "
+            "after the public angular writer; diagnostic cache/Create handoff only"
+        ),
+    )
+    parser.add_argument(
         "--frida-processwheel-with-processsuspension",
         action="store_true",
         help=(
@@ -2561,6 +2713,30 @@ def main() -> int:
         help=(
             "capture a narrow Frida ProcessCollision entry/exit boundary for source tags; "
             "diagnostic only and incompatible with C++/timing routes"
+        ),
+    )
+    parser.add_argument(
+        "--frida-processcollision-capture-untagged-before-source",
+        action="store_true",
+        help=(
+            "also retain at most eight untagged ProcessCollision rows before the "
+            "source-tag bridge publishes its first tag; provenance-only startup diagnostic"
+        ),
+    )
+    parser.add_argument(
+        "--frida-processcollision-capture-untagged-after-writer",
+        action="store_true",
+        help=(
+            "retain at most eight untagged ProcessCollision rows after the public "
+            "angular setter; requires both bounded ProcessCollision and state-writer windows"
+        ),
+    )
+    parser.add_argument(
+        "--frida-processcollision-untagged-min-game-time-ms",
+        type=int,
+        help=(
+            "ignore untagged ProcessCollision rows before this native gameTimeMs; "
+            "use only with the bounded untagged-startup diagnostic"
         ),
     )
     parser.add_argument(
@@ -2668,6 +2844,17 @@ def main() -> int:
             parser.error("--frida-state-writer-source-window requires the Frida route")
     if args.frida_state_writer_capture_untagged and not args.frida_state_writer_source_window:
         parser.error("--frida-state-writer-capture-untagged requires --frida-state-writer-source-window")
+    if args.frida_native_setter_capture_untagged_after_writer:
+        if not args.frida_processwheel_source_window or not args.frida_state_writer_source_window:
+            parser.error(
+                "--frida-native-setter-capture-untagged-after-writer requires both "
+                "ProcessWheel and state-writer source windows"
+            )
+        if args.cpp_hook or args.timing_only or args.collision_diagnostics or args.suspension_stage_only:
+            parser.error(
+                "--frida-native-setter-capture-untagged-after-writer requires the "
+                "lightweight Frida wheel route"
+            )
     if args.frida_processwheel_capture_untagged_after_writer:
         if not args.frida_processwheel_source_window or not args.frida_state_writer_source_window:
             parser.error(
@@ -2687,6 +2874,34 @@ def main() -> int:
             parser.error("invalid Frida ProcessCollision source window")
         if args.cpp_hook or args.timing_only:
             parser.error("--frida-processcollision-source-window requires the Frida route")
+    if args.frida_processcollision_capture_untagged_before_source:
+        if not args.frida_processcollision_source_window:
+            parser.error(
+                "--frida-processcollision-capture-untagged-before-source requires "
+                "--frida-processcollision-source-window"
+            )
+        if args.cpp_hook or args.timing_only:
+            parser.error(
+                "--frida-processcollision-capture-untagged-before-source requires the Frida route"
+            )
+    if args.frida_processcollision_capture_untagged_after_writer:
+        if not args.frida_processcollision_source_window or not args.frida_state_writer_source_window:
+            parser.error(
+                "--frida-processcollision-capture-untagged-after-writer requires both "
+                "ProcessCollision and state-writer source windows"
+            )
+        if args.cpp_hook or args.timing_only:
+            parser.error(
+                "--frida-processcollision-capture-untagged-after-writer requires the Frida route"
+            )
+    if args.frida_processcollision_untagged_min_game_time_ms is not None:
+        if not args.frida_processcollision_capture_untagged_before_source:
+            parser.error(
+                "--frida-processcollision-untagged-min-game-time-ms requires "
+                "--frida-processcollision-capture-untagged-before-source"
+            )
+        if args.frida_processcollision_untagged_min_game_time_ms < 0:
+            parser.error("--frida-processcollision-untagged-min-game-time-ms must be non-negative")
     if args.frida_processsuspension_source_window:
         start_frame, end_frame = args.frida_processsuspension_source_window
         if start_frame < 1 or end_frame < start_frame:
@@ -3041,7 +3256,7 @@ def main() -> int:
             existing_gta_pids = {
                 int(process.pid)
                 for process in device.enumerate_processes()
-                if process.name.lower().rstrip(".exe") in {"gta_sa", "gta-sa"}
+                if _is_gta_process_name(process.name)
             }
             launcher_process = subprocess.Popen(
                 [str(launcher), args.connect_uri],
@@ -3063,15 +3278,31 @@ def main() -> int:
             while time.monotonic() < deadline:
                 candidates = [
                     process for process in device.enumerate_processes()
-                    if process.name.lower().rstrip(".exe") in {"gta_sa", "gta-sa"}
+                    if _is_gta_process_name(process.name)
                     and int(process.pid) not in existing_gta_pids
                 ]
                 if candidates:
+                    # A normal launcher can briefly expose a bootstrap GTA
+                    # child and the connected gameplay child together.  JOIN
+                    # proves the client reached the server, but enumeration
+                    # order does not identify that child.  Prefer the newest
+                    # process and record the candidate set for provenance.
+                    def create_time(process: Any) -> tuple[float, int]:
+                        try:
+                            return (psutil.Process(int(process.pid)).create_time(), int(process.pid))
+                        except psutil.Error:
+                            return (0.0, int(process.pid))
+                    candidates.sort(key=create_time, reverse=True)
+                    print(
+                        "[launcher] GTA candidates after JOIN: "
+                        + ", ".join(f"{p.name}:{p.pid}" for p in candidates)
+                        + f"; selected {candidates[0].name}:{candidates[0].pid}"
+                    )
                     pid = int(candidates[0].pid)
                     break
                 time.sleep(0.25)
             if pid is None:
-                raise RuntimeError("normal MTA launcher did not create a new gta_sa.exe")
+                raise RuntimeError("normal MTA launcher did not create a new GTA child process")
             session = device.attach(pid)
         else:
             spawned_suspended = True
@@ -3111,12 +3342,20 @@ def main() -> int:
         "capture_untagged_state_writers": bool(args.frida_state_writer_capture_untagged),
         "source_tag_order_diagnostics": bool(args.frida_source_tag_order_diagnostics),
         "capture_untagged_processwheel_after_writer": bool(args.frida_processwheel_capture_untagged_after_writer),
+        "capture_untagged_native_setters_after_writer": bool(args.frida_native_setter_capture_untagged_after_writer),
         "angular_writer_rva_client_dll": hex(0x7AE0B0),
         "paired_processsuspension": bool(args.frida_processwheel_with_processsuspension),
         "processcollision_source_window": (
             list(args.frida_processcollision_source_window)
             if args.frida_processcollision_source_window else None
         ),
+        "capture_untagged_processcollision_before_source": bool(
+            args.frida_processcollision_capture_untagged_before_source
+        ),
+        "capture_untagged_processcollision_after_writer": bool(
+            args.frida_processcollision_capture_untagged_after_writer
+        ),
+        "untagged_processcollision_min_game_time_ms": args.frida_processcollision_untagged_min_game_time_ms,
         "processsuspension_source_window": (
             list(args.frida_processsuspension_source_window)
             if args.frida_processsuspension_source_window else None
@@ -3290,6 +3529,13 @@ def main() -> int:
             tuple(args.frida_processcollision_source_window)
             if args.frida_processcollision_source_window else None
         ),
+        capture_untagged_processcollision_before_source=bool(
+            args.frida_processcollision_capture_untagged_before_source
+        ),
+        capture_untagged_processcollision_after_writer=bool(
+            args.frida_processcollision_capture_untagged_after_writer
+        ),
+        untagged_processcollision_min_game_time_ms=args.frida_processcollision_untagged_min_game_time_ms,
         processsuspension_source_window=(
             tuple(args.frida_processsuspension_source_window)
             if args.frida_processsuspension_source_window else None
@@ -3303,6 +3549,9 @@ def main() -> int:
         capture_untagged_state_writers=bool(args.frida_state_writer_capture_untagged),
         source_tag_order_diagnostics=bool(args.frida_source_tag_order_diagnostics),
         capture_untagged_processwheel_after_writer=bool(args.frida_processwheel_capture_untagged_after_writer),
+        capture_untagged_native_setters_after_writer=bool(
+            args.frida_native_setter_capture_untagged_after_writer
+        ),
     )
     if args.orchestrator and not (args.cpp_hook or args.timing_only):
         if not args.orchestrator.exists():
@@ -3337,6 +3586,9 @@ def main() -> int:
             "const CAPTURE_UNTAGGED_PROCESSWHEEL_AFTER_WRITER = "
             + str(args.frida_processwheel_capture_untagged_after_writer).lower()
             + ";\n"
+            "const CAPTURE_UNTAGGED_NATIVE_SETTERS_AFTER_WRITER = "
+            + str(args.frida_native_setter_capture_untagged_after_writer).lower()
+            + ";\n"
             "const SUSPENSION_STAGE_ONLY = "
             + str(args.suspension_stage_only).lower()
             + ";\n"
@@ -3369,6 +3621,15 @@ def main() -> int:
                 list(args.frida_processcollision_source_window)
                 if args.frida_processcollision_source_window else None
             )
+            + ";\n"
+            "const CAPTURE_UNTAGGED_PROCESSCOLLISION_BEFORE_SOURCE = "
+            + str(args.frida_processcollision_capture_untagged_before_source).lower()
+            + ";\n"
+            "const CAPTURE_UNTAGGED_PROCESSCOLLISION_AFTER_WRITER = "
+            + str(args.frida_processcollision_capture_untagged_after_writer).lower()
+            + ";\n"
+            "const UNTAGGED_PROCESSCOLLISION_MIN_GAME_TIME_MS = "
+            + json.dumps(args.frida_processcollision_untagged_min_game_time_ms)
             + ";\n"
             "const PROCESSSUSPENSION_SOURCE_WINDOW = "
             + json.dumps(
@@ -3489,17 +3750,22 @@ def main() -> int:
         try:
             restore_with_retry(restore_vorbis)
         finally:
-            restore_with_retry(restore_actual_race)
-            restore_with_retry(restore_tas_folder)
-            restore_with_retry(restore_pose_linear_only)
-            restore_with_retry(restore_pose_only)
+            # Several diagnostics patch the same TAS client file. Restore in
+            # strict reverse preparation order; restoring the public-folder
+            # snapshot first would otherwise reintroduce usePrivateFolder=false
+            # from a later snapshot (the old order left the deployed resource
+            # contaminated after successful captures).
+            restore_with_retry(restore_capture_start_delay)
+            restore_with_retry(restore_tas_automation)
+            restore_with_retry(restore_capture_output)
+            restore_with_retry(restore_one_tick)
             restore_with_retry(restore_playback_pre_render)
             restore_with_retry(restore_playback_load_settle)
             restore_with_retry(restore_controls_only)
-            restore_with_retry(restore_one_tick)
-            restore_with_retry(restore_capture_output)
-            restore_with_retry(restore_tas_automation)
-            restore_with_retry(restore_capture_start_delay)
+            restore_with_retry(restore_pose_only)
+            restore_with_retry(restore_pose_linear_only)
+            restore_with_retry(restore_actual_race)
+            restore_with_retry(restore_tas_folder)
             restore_with_retry(restore_gta_import)
             restore_with_retry(restore_registry)
             if args.cpp_hook:

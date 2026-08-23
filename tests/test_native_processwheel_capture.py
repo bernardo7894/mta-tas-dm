@@ -146,6 +146,32 @@ def test_controls_only_accepts_already_disabled_interpolation_default(tmp_path):
     assert client.read_bytes() == original
 
 
+def test_controls_only_recovers_already_controls_only_deployment(tmp_path):
+    tool = _load_tool()
+    resource = tmp_path / "server" / "mods" / "deathmatch" / "resources" / "tas"
+    resource.mkdir(parents=True)
+    client = resource / "client.lua"
+    original = (
+        b"useOnlyBinds = true\n"
+        b"playbackInterpolation = false\n"
+        b"if not tas.settings.useOnlyBinds then\n"
+        b"if not tas.settings.useOnlyBinds then\n"
+        b"\tlocal cachedWarpsLoaded = false\n"
+    )
+    client.write_bytes(original)
+    restore = tool._prepare_controls_only_playback(tmp_path)
+    assert b"native-capture controls-only state writes disabled" in client.read_bytes()
+    restore()
+    assert client.read_bytes() == original
+
+
+def test_restore_order_reverses_overlapping_tas_preparations():
+    source = TOOL.read_text(encoding="utf-8")
+    cleanup = source[source.index("        try:\n            restore_with_retry(restore_vorbis)"):]
+    assert cleanup.index("restore_playback_pre_render") < cleanup.index("restore_controls_only")
+    assert cleanup.index("restore_controls_only") < cleanup.index("restore_tas_folder")
+
+
 def test_actual_race_duration_guard_preserves_full_playback():
     source = TOOL.read_text(encoding="utf-8")
     assert "17781.0 / 99.0" in source
@@ -162,9 +188,20 @@ def test_client_receives_connection_uri_without_debug_core_autoconnect():
 def test_normal_launcher_child_attach_mode_is_separate_from_direct_bootstrap():
     source = TOOL.read_text(encoding="utf-8")
     assert '"--launcher-exe"' in source
-    assert 'normal MTA launcher did not create a new gta_sa.exe' in source
+    assert 'normal MTA launcher did not create a new GTA child process' in source
+    assert '_is_gta_process_name(process.name)' in source
+    assert 'candidates.sort(key=create_time, reverse=True)' in source
+    assert 'GTA candidates after JOIN' in source
     assert 'skip_frida_bootstrap=bool(args.prepare_gta_import or launcher)' in source
     assert 'launcher_process.terminate()' in source
+
+
+def test_launcher_cleanup_and_attach_include_debug_gta_child_name():
+    tool = _load_tool()
+    assert tool._is_gta_process_name("gta_sa.exe")
+    assert tool._is_gta_process_name("gta_sa_d.exe")
+    assert tool._is_gta_process_name("gta-sa_d.exe")
+    assert not tool._is_gta_process_name("gta_sa_helper.exe")
 
 
 def test_actual_race_map_start_waits_for_client_join():
@@ -258,6 +295,8 @@ def test_frida_angular_state_writer_diagnostic_is_bounded_and_read_only():
     assert "callerBacktrace" in script
     assert "gta-native-set-element-velocity-public-initializer" in script
     assert "clientEntityNative411Candidates" in script
+    assert "offset = -0x2000" in script
+    assert "offset <= 0x3000" in script
     assert "SetElementAngularVelocity signature mismatch" in script
     assert "turnVelocityPtr = this.context.esp.add(8).readPointer()" in script
 
@@ -282,6 +321,31 @@ def test_frida_processwheel_source_window_limits_rows_without_disabling_hook():
     assert "source:'gta-native-set-element-velocity'" in script
     assert "source:'gta-native-set-move-speed'" in script
     assert "if (INSTALL_NATIVE_WHEEL_HOOK)" in script
+
+
+def test_native_setter_handoff_capture_is_bounded_and_explicitly_untagged():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "native-setter-handoff",
+        processwheel_source_window=(1, 3),
+        state_writer_source_window=(1, 3),
+        capture_untagged_state_writers=True,
+        capture_untagged_native_setters_after_writer=True,
+    )
+    assert "const CAPTURE_UNTAGGED_NATIVE_SETTERS_AFTER_WRITER = true;" in script
+    assert "postWriterUntaggedNativeSetterCalls < 16" in script
+    assert "publicVelocityWriterObserved" in script
+    assert "untagged-after-public-velocity-writer" in script
+    assert "publicWriterClientEntity" in script
+    assert "source:'untagged-after-public-angular-writer'" not in script
+    assert "captureProvenance:untaggedNativeSetter" in script
+    assert "nativeVehicle:this.context.ecx.toString()" in script
+    assert "wrapperNative411Candidates:clientEntityNative411Candidates(this.context.ecx)" in script
+    assert "DebugSymbol.findFunctionsNamed('CPoolsSA::AddVehicle')" in script
+    assert "source:'gta-native-pools-add-vehicle'" in script
+    assert "source-CPoolsSA::AddVehicle" in script
+    assert "enumerateSymbols" not in script
 
 
 def test_frida_processsuspension_source_window_adds_only_narrow_boundary():
@@ -310,7 +374,8 @@ def test_frida_processwheel_can_skip_writer_side_channel_hooks():
         writer_diagnostics=False,
     )
     assert "const INSTALL_STATE_WRITER_DIAGNOSTICS = false;" in script
-    assert "if (INSTALL_STATE_WRITER_DIAGNOSTICS && Array.isArray(PROCESSWHEEL_SOURCE_WINDOW))" in script
+    assert "if (INSTALL_STATE_WRITER_DIAGNOSTICS" in script
+    assert "Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)" in script
 
 
 def test_frida_processwheel_can_skip_transmission_boundary_hook():
@@ -529,7 +594,47 @@ def test_reduced_stage_probe_keeps_collision_check_and_matrix_boundaries():
     assert "collisionCheck:control.collisionCheck" in script
     assert "nativeStageCollisionKey" in script
     assert "nativeStageProcessCollisionKey" in script
+    assert "nativeStageProcessCollisionBeforeSuspension" in script
+    assert "automobileCollisionPointsBefore:this.nativeStageProcessCollisionBeforeAutomobileCollisionPoints" in script
+    assert "suspensionAfter:afterSuspension" in script
     assert "processCollisionBoundaries:control.processCollisionBoundaries" in script
+
+
+def test_processcollision_untagged_after_writer_capture_is_bounded_and_labelled():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "collision-writer-startup",
+        install_wheel_hook=False,
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+        processcollision_source_window=(1, 3),
+        capture_untagged_processcollision_after_writer=True,
+        state_writer_source_window=(1, 3),
+        capture_untagged_state_writers=True,
+    )
+    assert "const CAPTURE_UNTAGGED_PROCESSCOLLISION_AFTER_WRITER = true;" in script
+    assert "allowUntaggedProcessCollisionAfterWriter" in script
+    assert "'untagged-after-public-angular-writer'" in script
+
+
+def test_processcollision_untagged_startup_capture_is_bounded_and_labelled():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "collision-startup",
+        install_wheel_hook=False,
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+        processcollision_source_window=(1, 30),
+        capture_untagged_processcollision_before_source=True,
+        untagged_processcollision_min_game_time_ms=30000,
+    )
+    assert "const CAPTURE_UNTAGGED_PROCESSCOLLISION_BEFORE_SOURCE = true;" in script
+    assert "const UNTAGGED_PROCESSCOLLISION_MIN_GAME_TIME_MS = 30000;" in script
+    assert "maxUntaggedProcessCollisionBeforeSource = 8" in script
+    assert "'untagged-before-source-tag'" in script
+    assert "captureProvenance:boundary.captureProvenance" in script
 
 
 def test_actual_race_capture_removes_synthetic_map_and_polls_race_vehicle(tmp_path):

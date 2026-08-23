@@ -51,8 +51,10 @@ bootstrap; loader mode uses `--prepare-gta-import` and disables that Frida
 bootstrap so the loader and Frida never initialize core twice. For the stable
 local-client route, pass `--launcher-exe "...\\Multi Theft Auto_d.exe"` instead:
 the normal launcher creates GTA, the harness waits for server `JOIN`, then
-attaches only to the new GTA child. The C++ hook has already initialized in
-`multiplayer_sa_d.dll`, so late Frida attachment does not lose native rows and
+attaches only to the new GTA child (both `gta_sa.exe` and the Debug
+`gta_sa_d.exe` process names are recognized and stale children are killed).
+The C++ hook has already initialized in `multiplayer_sa_d.dll`, so late Frida
+attachment does not lose native rows and
 does not perturb L3 startup. The server `JOIN` watcher checks both redirected
 stdout and `server/mods/deathmatch/logs/server.log`. An interrupted
 run is recovered by the next launch's process-kill and side-by-side restore
@@ -136,7 +138,26 @@ silently skip the one-tick event. Native ProcessWheel compression is post-normal
 therefore `nativeInternal.suspensionCompressionInputConvention` must explicitly
 be `raw-line-fraction` or `normalized-post-process-control`. Raw-line input is
 normalized by GTA at the source `ProcessControl` boundary. The
-`bVehicleColProcessed` bit is byte `0x42B`, bit 0. The hook records
+For the narrow public-initializer handoff diagnostic, combine
+`--frida-processwheel-source-window START END`,
+`--frida-state-writer-source-window START END`,
+`--frida-state-writer-capture-untagged`, and
+`--frida-native-setter-capture-untagged-after-writer`. The last option retains
+at most sixteen read-only `CVehicleSA::SetMoveSpeed` calls after the public
+velocity/angular writer boundary, records the wrapper pointer and bounded
+model-411 candidate scan, and labels untagged rows explicitly. It also enables
+the narrow PDB-symbol `CPoolsSA::AddVehicle` hook (named lookup only, never
+whole-module symbol enumeration), recording the model-411 client pointer,
+returned `CVehicle*`, and returned-wrapper candidate. The v12 accepted audit
+shows the AddVehicle client pointer equals the public initializer pointer and
+its native candidate equals the later ProcessWheel pointer; the returned
+`CVehicle*` to `CVehicleSA` method adjustment is source-backed virtual-base
+conversion. This remains a cache/Create handoff observation only; it never
+feeds a native pointer or private state to the simulator. Reject rows outside
+the `.45..55` timer window or without a valid server `JOIN`, and reject the
+broad runtime symbol-enumeration experiment because it stalls script load.
+
+The `bVehicleColProcessed` bit is byte `0x42B`, bit 0. The hook records
 `CTimer::GetTimeStep` at `0x77CB5C`; pass that observed multiplier to
 `tools/run_one_tick_simulator.py --native-timer-step`, and pass the same config
 with `--native-internal-config` for a same-hidden-state local comparison. The
@@ -209,7 +230,11 @@ it with `infernus-physics/tools/audit_native_processsuspension_boundary.py`.
 The stream is a timing-filtered forensic boundary diagnostic, not hidden-state
 injection or continuous trajectory evidence. A valid target window does not
 waive the complete real-resource controls-only requirement; map-restart
-vehicle addresses and rejected timer rows remain contamination.
+vehicle addresses and rejected timer rows remain contamination. A launcher
+attempt without a server `JOIN`, or a stream whose native `gameTimeMs` remains
+at startup values (for example `0` with `timerStep=1`), is rejected outright;
+those rows are bootstrap/observer provenance rather than native physics
+comparison evidence.
 
 Combining
 `--cpp-hook --collision-diagnostics` also writes a `.collision.bin` stream from the two verified `ApplyCollisionAlt`
