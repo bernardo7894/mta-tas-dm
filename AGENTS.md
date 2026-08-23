@@ -396,6 +396,11 @@ read-only hook on the exported `SetNativeProcessWheelSourceTagBridge`; it
 records bridge timing/process ordinal alongside ProcessControl rows and never
 writes tags or vehicle state. It distinguishes callback ordering from physics,
 and remains diagnostic even when an individual timer sample is accepted.
+When `--frida-state-writer-source-window` and
+`--frida-state-writer-capture-untagged` are used, the same read-only writer
+route also records the public `SetElementVelocity` initializer separately from
+the angular setter; this startup pair is provenance-only and is rejected if its
+shared timer sample is outside `[0.45,0.55]`.
 The server `JOIN` event is watched both on stdout and the server log because
 redirected Debug-server stdout is not consistently flushed. Keep native rows separate from Lua
 `vehicleTelemetry` fields and preserve their provenance when merging diagnostic
