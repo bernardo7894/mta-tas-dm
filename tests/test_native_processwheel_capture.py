@@ -216,6 +216,7 @@ def test_frida_processwheel_source_window_limits_rows_without_disabling_hook():
     assert "sourceTag.frame < PROCESSWHEEL_SOURCE_WINDOW[0]" in script
     assert "sourceFrameTag:sourceTag.frame" in script
     assert "timerStep:f(timerStep)" in script
+    assert "transmissionCalls:c.transmissionCalls" in script
     assert "CPhysicalSA::SetMoveSpeed" in script
     assert "CVehicleSA::SetMoveSpeed" in script
     assert "staticSetElementVelocityRva = 0x7B0010" in script
