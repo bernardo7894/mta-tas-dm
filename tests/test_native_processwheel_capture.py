@@ -68,6 +68,21 @@ def test_one_tick_resource_prep_accepts_current_source_tag_trigger(tmp_path):
     assert (resource / "server.lua").read_text(encoding="utf-8") == server
 
 
+def test_playback_load_settle_prep_is_reversible(tmp_path):
+    tool = _load_tool()
+    resource = tmp_path / "server" / "mods" / "deathmatch" / "resources" / "tas"
+    resource.mkdir(parents=True)
+    client = resource / "client.lua"
+    original = (
+        b"\ttas.var.automation.playbackTimer = setTimer(tas.automation_start_playback, 250, 1)\n"
+    )
+    client.write_bytes(original)
+    restore = tool._prepare_playback_load_settle(tmp_path, 5000)
+    assert b"automation_start_playback, 5000, 1" in client.read_bytes()
+    restore()
+    assert client.read_bytes() == original
+
+
 def test_playback_pre_render_prep_is_reversible(tmp_path):
     tool = _load_tool()
     resource = (

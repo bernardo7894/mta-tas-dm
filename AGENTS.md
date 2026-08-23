@@ -284,9 +284,14 @@ snapshots the native `aAutomobileColPoints` candidate buffer at RVA
 `0x81BFF8`, `ProcessEntityCollision` output points, and ProcessSuspension
 before/after state; these are direct collision-stage diagnostics and do not
 make `m_wheelColPoint` a guaranteed fresh ray result. `--playback-start-delay-ms`
-can warm the native timer before source playback, and `--capture-from-first-gas`
-buffers Frida rows until the first nonzero pedal; both values are recorded in
-metadata. `--suspension-stage-only` is a Frida-only reduced collision mode
+can warm the native timer before source playback. The diagnostic-only
+`--playback-load-settle-ms` control additionally waits after the TAS file is
+loaded and before `recordplayback`; it is intended to distinguish file-load
+startup stalls from the first playback tick and is recorded in metadata. A
+fresh 5-second settle did not make the first actual-race timer step stable, so
+this option is timing evidence only and never a physics correction.
+`--capture-from-first-gas` buffers Frida rows until the first nonzero pedal;
+both values are recorded in metadata. `--suspension-stage-only` is a Frida-only reduced collision mode
 that installs only the entity-collision and ProcessSuspension stage hooks;
 its metadata must retain `suspension_stage_only=true`. In the local Debug
 build, the stage observer reads exact TAS source tags through the non-mutating

@@ -113,7 +113,10 @@ stage hooks; its metadata records `suspension_stage_only: true`. It is still a
 forensic diagnostic and must pass the native timing gate before use.
 The recommended `--controls-only-playback` mode temporarily disables TAS pose,
 velocity, and angular-velocity playback and applies only recorded controls.
-Without it, legacy TAS playback imposes recorded state and native rows are
+For actual-race startup timing diagnostics, `--playback-load-settle-ms`
+optionally waits after the TAS file is loaded and before `recordplayback`; it
+is a harness timing control, not a physics-state change. Without it, legacy
+TAS playback imposes recorded state and native rows are
 state-forced diagnostics rather than an independent trajectory. For long C++
 controls-only runs, `--cpp-no-matrix` isolates matrix-snapshot overhead; the
 local C++ matrix read is also SEH-guarded. `--pose-linear-only-playback` is a

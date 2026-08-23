@@ -1439,6 +1439,35 @@ def _prepare_registry(mta_bin: Path) -> Any:
     return restore
 
 
+def _prepare_playback_load_settle(mta_bin: Path, settle_ms: int) -> Any:
+    """Temporarily let the loaded TAS settle before starting playback.
+
+    Loading a large actual-race TAS immediately before ``recordplayback`` can
+    make the first native ProcessControl timestep a startup outlier.  This is
+    a capture-harness timing control only; it does not change TAS controls or
+    physics state.
+    """
+    client = (
+        mta_bin / "server" / "mods" / "deathmatch" / "resources"
+        / "tas" / "client.lua"
+    )
+    if not client.exists():
+        raise RuntimeError(f"TAS resource is missing: {client}")
+    original = client.read_bytes()
+    marker = b"\ttas.var.automation.playbackTimer = setTimer(tas.automation_start_playback, 250, 1)"
+    if original.count(marker) != 1:
+        raise RuntimeError(
+            "playback-load-settle preparation could not find the automation playback timer"
+        )
+    replacement = marker.replace(b", 250, 1)", f", {int(settle_ms)}, 1)".encode("ascii"))
+    client.write_bytes(original.replace(marker, replacement, 1))
+
+    def restore() -> None:
+        client.write_bytes(original)
+
+    return restore
+
+
 def _prepare_pose_only_playback(mta_bin: Path) -> Any:
     """Temporarily force recorded pose but leave native linear/angular velocity free."""
     client = (
@@ -2320,6 +2349,15 @@ def main() -> int:
         help="delay source playback after vehicle setup; use 30000 for a warm native timer window",
     )
     parser.add_argument(
+        "--playback-load-settle-ms",
+        type=int,
+        default=250,
+        help=(
+            "wait after loading the TAS file before recordplayback; capture-harness "
+            "timing control for startup outlier diagnostics"
+        ),
+    )
+    parser.add_argument(
         "--tas-automation-playback",
         action="store_true",
         help=(
@@ -2404,12 +2442,18 @@ def main() -> int:
         parser.error("--reference-map-resource must be a single server resource name")
     if args.playback_start_delay_ms < 0:
         parser.error("--playback-start-delay-ms must be non-negative")
+    if args.playback_load_settle_ms < 0:
+        parser.error("--playback-load-settle-ms must be non-negative")
     if args.reference_map_resource:
         # etnies-native.tas contains 17,781 frames at 99 FPS.  Include client
         # startup/map setup and the requested warm-up; never silently kill a
         # real playback halfway through just because the caller copied a short
         # synthetic-capture duration.
-        minimum_duration = 60.0 + (17781.0 / 99.0) + 15.0 + args.playback_start_delay_ms / 1000.0
+        minimum_duration = (
+            60.0 + (17781.0 / 99.0) + 15.0
+            + args.playback_start_delay_ms / 1000.0
+            + args.playback_load_settle_ms / 1000.0
+        )
         if args.duration < minimum_duration:
             parser.error(
                 f"--reference-map-resource requires --duration >= {minimum_duration:.1f}s "
@@ -2576,6 +2620,10 @@ def main() -> int:
     restore_controls_only = (
         _prepare_controls_only_playback(mta_bin)
         if args.controls_only_playback else (lambda: None)
+    )
+    restore_playback_load_settle = (
+        _prepare_playback_load_settle(mta_bin, args.playback_load_settle_ms)
+        if args.reference_map_resource else (lambda: None)
     )
     restore_playback_pre_render = (
         _prepare_playback_pre_render(mta_bin)
@@ -2832,6 +2880,7 @@ def main() -> int:
         "pose_linear_only_playback": bool(args.pose_linear_only_playback),
         "playback_output_name": playback_output_name if (args.tas_automation_playback or args.reference_map_resource) else args.playback_output_name or "",
         "playback_start_delay_ms": args.playback_start_delay_ms,
+        "playback_load_settle_ms": args.playback_load_settle_ms,
         "tas_automation_playback": bool(args.tas_automation_playback),
         "one_tick_diagnostic": one_tick_config is not None,
         "one_tick_config": one_tick_config or {},
@@ -3078,6 +3127,7 @@ def main() -> int:
             restore_with_retry(restore_pose_linear_only)
             restore_with_retry(restore_pose_only)
             restore_with_retry(restore_playback_pre_render)
+            restore_with_retry(restore_playback_load_settle)
             restore_with_retry(restore_controls_only)
             restore_with_retry(restore_one_tick)
             restore_with_retry(restore_capture_output)
