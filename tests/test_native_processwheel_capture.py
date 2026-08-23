@@ -256,6 +256,7 @@ def test_frida_angular_state_writer_diagnostic_is_bounded_and_read_only():
     assert "callerModule" in script
     assert "callerSymbol" in script
     assert "callerBacktrace" in script
+    assert "gta-native-set-element-velocity-public-initializer" in script
     assert "SetElementAngularVelocity signature mismatch" in script
     assert "turnVelocityPtr = this.context.esp.add(8).readPointer()" in script
 

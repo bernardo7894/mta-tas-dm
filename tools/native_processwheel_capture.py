@@ -1431,6 +1431,41 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                         return CAPTURE_UNTAGGED_STATE_WRITERS;
                     return sourceTag.frame >= writerWindow[0] && sourceTag.frame <= writerWindow[1];
                 }};
+                if (Array.isArray(STATE_WRITER_SOURCE_WINDOW)) {{
+                    try {{
+                        Interceptor.attach(clientDll.base.add(staticSetElementVelocityRva), {{
+                            onEnter() {{
+                                try {{
+                                    const sourceTag = readNativeSourceTag();
+                                    if (!writerTagAccepted(sourceTag)) return;
+                                    const entityPtr = this.context.esp.add(4).readPointer();
+                                    const speedPtr = this.context.esp.add(8).readPointer();
+                                    this.nativePublicInitializerVelocity = {{
+                                        source:'gta-native-set-element-velocity-public-initializer',
+                                        label:OUTPUT_LABEL,
+                                        sourceFrameTag:sourceTag.frame,
+                                        sourceTickMsTag:sourceTag.tick,
+                                        sourceTagWasPublished:sourceTag.frame !== null && sourceTag.frame >= 1,
+                                        gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
+                                        gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
+                                        timerStep:f(timerStep),
+                                        clientEntity:entityPtr.toString(),
+                                        velocity:vec(speedPtr),
+                                        returnAddress:this.returnAddress.toString(),
+                                        callerSymbol:(()=>{{try{{return DebugSymbol.fromAddress(this.returnAddress).toString()}}catch(_){{return null}}}})(),
+                                    }};
+                                }} catch (_) {{ this.nativePublicInitializerVelocity = null; }}
+                            }},
+                            onLeave() {{
+                                if (this.nativePublicInitializerVelocity && captureActive)
+                                    batch.push(this.nativePublicInitializerVelocity);
+                                if (batch.length >= 32) flush();
+                            }},
+                        }});
+                    }} catch (error) {{
+                        send({{type:'native_hook_error', message:'SetElementVelocity public initializer: ' + String(error)}});
+                    }}
+                }}
                 Interceptor.attach(angularSetter, {{
                     onEnter() {{
                         try {{
