@@ -341,11 +341,37 @@ def test_native_setter_handoff_capture_is_bounded_and_explicitly_untagged():
     assert "source:'untagged-after-public-angular-writer'" not in script
     assert "captureProvenance:untaggedNativeSetter" in script
     assert "nativeVehicle:this.context.ecx.toString()" in script
-    assert "wrapperNative411Candidates:clientEntityNative411Candidates(this.context.ecx)" in script
+    assert "const nativeCandidates = clientEntityNative411Candidates(this.context.ecx);" in script
+    assert "wrapperNative411Candidates:nativeCandidates" in script
+    assert "nativePrivateStateSnapshot" in script
+    assert "returnedWrapperNative411CandidateStates" in script
     assert "DebugSymbol.findFunctionsNamed('CPoolsSA::AddVehicle')" in script
+    assert "DebugSymbol.findFunctionsNamed(name)" in script
+    assert "source:'gta-native-set-turn-speed'" in script
+    assert "nested-public-angular-writer" in script
+    assert "publicAngularWriterInProgress" in script
     assert "source:'gta-native-pools-add-vehicle'" in script
     assert "source-CPoolsSA::AddVehicle" in script
     assert "enumerateSymbols" not in script
+
+
+def test_frida_stage_source_window_limits_exact_stage_rows_and_keeps_named_setter_route():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "turn-stage-startup",
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+        stage_source_window=(1, 3),
+        state_writer_source_window=(1, 3),
+        capture_untagged_state_writers=True,
+        writer_diagnostics=True,
+        transmission_diagnostics=False,
+    )
+    assert "const STAGE_SOURCE_WINDOW = [1, 3];" in script
+    assert "stageSourceInWindow" in script
+    assert "source:'gta-native-set-turn-speed'" in script
+    assert "DebugSymbol.findFunctionsNamed(name)" in script
 
 
 def test_frida_processsuspension_source_window_adds_only_narrow_boundary():

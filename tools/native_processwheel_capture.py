@@ -56,6 +56,7 @@ def _native_script(
     stage_force_diagnostics: bool = False,
     stage_force_events: bool = False,
     stage_force_source_window: tuple[int, int] | None = None,
+    stage_source_window: tuple[int, int] | None = None,
     static_skid_diagnostics: bool = False,
     capture_from_first_gas: bool = False,
     one_tick_config: dict[str, Any] | None = None,
@@ -89,6 +90,7 @@ const SUSPENSION_STAGE_ONLY = {str(suspension_stage_only).lower()};
 const STAGE_FORCE_DIAGNOSTICS = {str(stage_force_diagnostics).lower()};
 const STAGE_FORCE_EVENTS = {str(stage_force_events).lower()};
 const STAGE_FORCE_SOURCE_WINDOW = {json.dumps(list(stage_force_source_window) if stage_force_source_window else None)};
+const STAGE_SOURCE_WINDOW = {json.dumps(list(stage_source_window) if stage_source_window else None)};
 const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
 const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
 const PROCESSWHEEL_SOURCE_WINDOW = {json.dumps(list(processwheel_source_window) if processwheel_source_window else None)};
@@ -231,6 +233,7 @@ try {{
 
 if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
     || INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS
+    || Array.isArray(STAGE_SOURCE_WINDOW)
     || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)
     || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)
     || Array.isArray(STATE_WRITER_SOURCE_WINDOW)) {{
@@ -267,6 +270,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
     let sourceTagBridgeEvents = [];
     let captureActive = !CAPTURE_FROM_FIRST_GAS;
     let publicAngularWriterObserved = false;
+    let publicAngularWriterInProgress = false;
     let publicVelocityWriterObserved = false;
     let publicVelocityWriterClientEntity = null;
     let postWriterUntaggedWheelCalls = 0;
@@ -399,6 +403,50 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
         }}
         return candidates;
     }};
+    // Read-only construction/private-state snapshot for the exact model-411
+    // candidate returned by CPoolsSA::AddVehicle or found in CVehicleSA's
+    // wrapper.  This is deliberately a diagnostic boundary: it is serialized
+    // for comparison only and is never written back into the simulator or
+    // native vehicle.
+    const nativePrivateStateSnapshot = vehicle => {{
+        try {{
+            if (!vehicle || vehicle.isNull() || vehicle.add(0x22).readU16() !== 411)
+                return null;
+            return {{
+                pointer:vehicle.toString(),
+                modelIndex:vehicle.add(0x22).readU16(),
+                position:vec(vehicle.add(0x04)),
+                linearVelocity:vec(vehicle.add(0x44)),
+                angularVelocity:vec(vehicle.add(0x50)),
+                vehicleFlagsByte3:u8(vehicle.add(0x42B)),
+                contactWheels:u8(vehicle.add(0x960)),
+                driveWheels:u8(vehicle.add(0x961)),
+                wheelStateMemory:u32Array4(vehicle.add(0x968)),
+                suspensionCompression:array4(vehicle.add(0x7D4)),
+                suspensionCompressionPrevious:array4(vehicle.add(0x7E4)),
+                wheelCounts:array4(vehicle.add(0x7F4)),
+                suspensionSpringLength:array4(vehicle.add(0x878)),
+                suspensionLineLength:array4(vehicle.add(0x888)),
+                wheelCollisionPoints:colPointArray(vehicle.add(0x724), 4),
+                currentGear:u8(vehicle.add(0x4B4)),
+                gearChangeCount:f(vehicle.add(0x4B8)),
+                inertiaValue1:f(vehicle.add(0x808)),
+                inertiaValue2:f(vehicle.add(0x80C)),
+                steerAngle:f(vehicle.add(0x494)),
+                rawSteerAngle:f(vehicle.add(0x58C)),
+                gasPedal:f(vehicle.add(0x49C)),
+                brakePedal:f(vehicle.add(0x4A0)),
+                staticAlreadySkidding:u8(staticAlreadySkidding),
+            }};
+        }} catch (_) {{
+            return null;
+        }}
+    }};
+    const nativePrivateStateSnapshots = candidates => (candidates || []).map(candidate => {{
+        let state = null;
+        try {{ state = nativePrivateStateSnapshot(ptr(candidate.pointer)); }} catch (_) {{}}
+        return {{...candidate, state}};
+    }});
     const physicalSnapshot = vehicle => ({{
         linearVelocity:vec(vehicle.add(0x44)),
         angularVelocity:vec(vehicle.add(0x50)),
@@ -642,7 +690,11 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                     control.sourceTickMsTagExit = sourceTagExit.tick;
                     control.controlExit = exit;
                     for (const record of control.activeRows || []) record.controlExit = exit;
-                    if (SUSPENSION_STAGE_ONLY && captureActive) {{
+                    const stageSourceInWindow = !Array.isArray(STAGE_SOURCE_WINDOW)
+                        || (typeof control.sourceFrameTagEntry === 'number'
+                            && control.sourceFrameTagEntry >= STAGE_SOURCE_WINDOW[0]
+                            && control.sourceFrameTagEntry <= STAGE_SOURCE_WINDOW[1]);
+                    if (SUSPENSION_STAGE_ONLY && captureActive && stageSourceInWindow) {{
                         const stageVehicle = this.nativeControlVehicle || this.context.ecx;
                         batch.push({{
                             source:'gta-native-process-stage', label:OUTPUT_LABEL,
@@ -1454,6 +1506,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                                     if (!taggedNativeSetter && !untaggedNativeSetter) return;
                                     if (untaggedNativeSetter) postWriterUntaggedNativeSetterCalls++;
                                     const speedPtr = this.context.esp.add(4).readPointer();
+                                    const nativeCandidates = clientEntityNative411Candidates(this.context.ecx);
                                     this.nativeSetMoveSpeedRecord = {{
                                         target:target[0],
                                         sourceFrameTag:sourceTag.frame,
@@ -1470,7 +1523,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                                         timerStep:f(timerStep),
                                         wrapper:this.context.ecx.toString(),
                                         nativeVehicle:this.context.ecx.toString(),
-                                        wrapperNative411Candidates:clientEntityNative411Candidates(this.context.ecx),
+                                        wrapperNative411Candidates:nativeCandidates,
                                         speed:vec(speedPtr),
                                         returnAddress:this.returnAddress.toString(),
                                     }};
@@ -1530,9 +1583,17 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                             if (!record || addVehicleRows >= 8 || !captureActive) return;
                             addVehicleRows++;
                             let returnedWrapperNative411Candidates = [];
+                            let returnedWrapperNative411CandidateStates = [];
+                            let returnedWrapperNative411CandidateStateError = null;
                             try {{
                                 if (!returnValue.isNull())
                                     returnedWrapperNative411Candidates = clientEntityNative411Candidates(returnValue);
+                                try {{
+                                    returnedWrapperNative411CandidateStates =
+                                        nativePrivateStateSnapshots(returnedWrapperNative411Candidates);
+                                }} catch (error) {{
+                                    returnedWrapperNative411CandidateStateError = String(error);
+                                }}
                             }} catch (_) {{}}
                             batch.push({{
                                 source:record.source,
@@ -1540,6 +1601,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                                 ...record,
                                 returnedWrapper:returnValue.toString(),
                                 returnedWrapperNative411Candidates,
+                                returnedWrapperNative411CandidateStates,
+                                returnedWrapperNative411CandidateStateError,
                             }});
                             if (batch.length >= 32) flush();
                         }},
@@ -1643,6 +1706,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                             if (!writerTagAccepted(sourceTag)) return;
                             const entityPtr = this.context.esp.add(4).readPointer();
                             const turnVelocityPtr = this.context.esp.add(8).readPointer();
+                            publicAngularWriterInProgress = true;
                             this.nativeSetElementAngularVelocity = {{
                                 sourceFrameTag:sourceTag.frame,
                                 sourceTickMsTag:sourceTag.tick,
@@ -1683,6 +1747,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                     }},
                     onLeave() {{
                         const record = this.nativeSetElementAngularVelocity;
+                        publicAngularWriterInProgress = false;
                         if (!record) return;
                         publicAngularWriterObserved = true;
                         if (!captureActive) return;
@@ -1696,6 +1761,71 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                 }});
             }} catch (error) {{
                 send({{type:'native_hook_error', message:'SetElementAngularVelocity: ' + String(error)}});
+            }}
+            // CClientVehicle::SetTurnSpeed dispatches to the source-side
+            // CVehicleSA/CPhysicalSA setter after the public angular writer.
+            // Resolve only these named symbols; this remains a bounded,
+            // read-only ownership/private-state boundary and never writes GTA.
+            try {{
+                const turnTargets = [];
+                for (const name of ['CVehicleSA::SetTurnSpeed', 'CPhysicalSA::SetTurnSpeed']) {{
+                    for (const address of (DebugSymbol.findFunctionsNamed(name) || []))
+                        if (!turnTargets.some(target => target.address.equals(address)))
+                            turnTargets.push({{name, address}});
+                }}
+                if (!turnTargets.length)
+                    throw new Error('CVehicleSA/CPhysicalSA::SetTurnSpeed Debug symbol not found');
+                const turnWriterWindow = Array.isArray(STATE_WRITER_SOURCE_WINDOW)
+                    ? STATE_WRITER_SOURCE_WINDOW : PROCESSWHEEL_SOURCE_WINDOW;
+                const turnWriterTagAccepted = sourceTag => {{
+                    if (!Array.isArray(turnWriterWindow)) return false;
+                    if (sourceTag.frame === null || sourceTag.frame < 1)
+                        return CAPTURE_UNTAGGED_STATE_WRITERS;
+                    return sourceTag.frame >= turnWriterWindow[0]
+                        && sourceTag.frame <= turnWriterWindow[1];
+                }};
+                for (const target of turnTargets) {{
+                    Interceptor.attach(target.address, {{
+                        onEnter() {{
+                            if (!publicAngularWriterInProgress) return;
+                            try {{
+                                const sourceTag = readNativeSourceTag();
+                                if (!turnWriterTagAccepted(sourceTag)) return;
+                                const speedPtr = this.context.esp.add(4).readPointer();
+                                const candidates = clientEntityNative411Candidates(this.context.ecx);
+                                this.nativeSetTurnSpeed = {{
+                                    source:'gta-native-set-turn-speed', label:OUTPUT_LABEL,
+                                    target:target.name,
+                                    sourceFrameTag:sourceTag.frame,
+                                    sourceTickMsTag:sourceTag.tick,
+                                    sourceTagWasPublished:!sourceTagIsUntagged(sourceTag),
+                                    captureProvenance:'nested-public-angular-writer',
+                                    gameFrame:(()=>{{try{{return gameFrameCounter.readU32()}}catch(_){{return null}}}})(),
+                                    gameTimeMs:(()=>{{try{{return gameTimeMs.readU32()}}catch(_){{return null}}}})(),
+                                    timerStep:f(timerStep),
+                                    wrapper:this.context.ecx.toString(),
+                                    nativeVehicle:this.context.ecx.toString(),
+                                    wrapperNative411Candidates:candidates,
+                                    privateStateBefore:nativePrivateStateSnapshots(candidates),
+                                    turnSpeed:vec(speedPtr),
+                                    returnAddress:this.returnAddress.toString(),
+                                }};
+                            }} catch (_) {{ this.nativeSetTurnSpeed = null; }}
+                        }},
+                        onLeave() {{
+                            const record = this.nativeSetTurnSpeed;
+                            if (!record || !captureActive) return;
+                            try {{
+                                record.privateStateAfter = nativePrivateStateSnapshots(
+                                    record.wrapperNative411Candidates);
+                            }} catch (_) {{ record.privateStateAfter = []; }}
+                            batch.push(record);
+                            if (batch.length >= 32) flush();
+                        }},
+                    }});
+                }}
+            }} catch (error) {{
+                send({{type:'native_hook_error', message:'SetTurnSpeed named hook: ' + String(error)}});
             }}
         }}
     }} catch(e) {{ send({{type:'native_hook_error', message:String(e)}}); }}
@@ -2776,6 +2906,16 @@ def main() -> int:
         help="with --collision-diagnostics, retain only ProcessEntityCollision/ProcessSuspension snapshots",
     )
     parser.add_argument(
+        "--frida-stage-source-window",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        help=(
+            "limit Frida suspension-stage ProcessControl rows to an inclusive "
+            "source-tag window; diagnostic only"
+        ),
+    )
+    parser.add_argument(
         "--stage-force-diagnostics",
         action="store_true",
         help=(
@@ -2998,6 +3138,14 @@ def main() -> int:
             "--suspension-stage-only requires Frida --collision-diagnostics, "
             "unless it is used for source-tag-order diagnostics"
         )
+    if args.frida_stage_source_window:
+        start_frame, end_frame = args.frida_stage_source_window
+        if start_frame < 1 or end_frame < start_frame:
+            parser.error("invalid Frida stage source window")
+        if not args.suspension_stage_only or args.cpp_hook or args.timing_only:
+            parser.error(
+                "--frida-stage-source-window requires the Frida --suspension-stage-only route"
+            )
     if args.stage_force_diagnostics and not args.suspension_stage_only:
         parser.error("--stage-force-diagnostics requires --suspension-stage-only")
     if args.stage_force_events and not args.suspension_stage_only:
@@ -3430,6 +3578,10 @@ def main() -> int:
             list(args.stage_force_source_window)
             if args.stage_force_source_window else None
         ),
+        "frida_stage_source_window": (
+            list(args.frida_stage_source_window)
+            if args.frida_stage_source_window else None
+        ),
         "static_skid_diagnostics": bool(args.static_skid_diagnostics or args.cpp_static_skid_diagnostics),
         "capture_from_first_gas": bool(args.capture_from_first_gas),
         "cpp_static_skid_diagnostics": bool(args.cpp_static_skid_diagnostics),
@@ -3516,6 +3668,10 @@ def main() -> int:
             tuple(args.stage_force_source_window)
             if args.stage_force_source_window else None
         ),
+        stage_source_window=(
+            tuple(args.frida_stage_source_window)
+            if args.frida_stage_source_window else None
+        ),
         static_skid_diagnostics=args.static_skid_diagnostics,
         capture_from_first_gas=args.capture_from_first_gas,
         one_tick_config=one_tick_config,
@@ -3566,6 +3722,7 @@ def main() -> int:
             "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS\n"
             "    || INSTALL_PAIRED_SUSPENSION\n"
             "    || INSTALL_SOURCE_TAG_ORDER_DIAGNOSTICS\n"
+            "    || Array.isArray(STAGE_SOURCE_WINDOW)\n"
             "    || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)\n"
             "    || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)\n"
             "    || Array.isArray(STATE_WRITER_SOURCE_WINDOW)) {"
@@ -3602,6 +3759,12 @@ def main() -> int:
             + json.dumps(
                 list(args.stage_force_source_window)
                 if args.stage_force_source_window else None
+            )
+            + ";\n"
+            "const STAGE_SOURCE_WINDOW = "
+            + json.dumps(
+                list(args.frida_stage_source_window)
+                if args.frida_stage_source_window else None
             )
             + ";\n"
             "const INSTALL_STATIC_SKID_DIAGNOSTICS = "

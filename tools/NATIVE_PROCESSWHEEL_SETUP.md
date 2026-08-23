@@ -152,10 +152,27 @@ returned `CVehicle*`, and returned-wrapper candidate. The v12 accepted audit
 shows the AddVehicle client pointer equals the public initializer pointer and
 its native candidate equals the later ProcessWheel pointer; the returned
 `CVehicle*` to `CVehicleSA` method adjustment is source-backed virtual-base
-conversion. This remains a cache/Create handoff observation only; it never
-feeds a native pointer or private state to the simulator. Reject rows outside
+conversion. The same bounded route also resolves the named
+`CPhysicalSA::SetTurnSpeed` symbol during the public angular writer and records
+an exact native private before/after snapshot. In accepted v15 evidence, only
+angular velocity changes; compression, previous compression, counts, wheel
+collision points, wheel states, flags, and transmission fields remain
+unchanged. This remains a cache/Create/setter handoff observation only; it
+never feeds a native pointer or private state to the simulator. Reject rows outside
 the `.45..55` timer window or without a valid server `JOIN`, and reject the
 broad runtime symbol-enumeration experiment because it stalls script load.
+
+For a same-run public-angular-to-ProcessControl startup join, use the Frida
+stage route with `--suspension-stage-only --collision-diagnostics
+--frida-stage-source-window START END`, plus the bounded state-writer window
+and `--frida-state-writer-capture-untagged`. The stage window limits serialized
+ProcessControl rows to exact source tags while the named SetTurnSpeed hook
+retains the untagged public-initializer handoff. The v16 audit joins the exact
+model-411 pointer: the public setter/native setter is accepted at `gameTimeMs`
+33743, accepted stage tags 1/2 are at 34014/34024, and tag 3 (`0.6175`) is
+rejected. The first accepted stage entry differs from the setter output, while
+tag-2 entry inherits tag-1 exit exactly. The intervening rejected/untagged
+startup history is provenance only and cannot be replayed or injected.
 
 The `bVehicleColProcessed` bit is byte `0x42B`, bit 0. The hook records
 `CTimer::GetTimeStep` at `0x77CB5C`; pass that observed multiplier to
