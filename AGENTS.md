@@ -352,9 +352,12 @@ ProcessSuspension stream by default; use
 `--cpp-processsuspension-source-window START END` to override it. The bounded
 stage route captures ProcessControl matrices as well as direct suspension
 state, and a target window can pass the strict timer-step policy without
-paying full-run boundary-observer overhead. It remains diagnostic: the latest
-accepted window reached source tags 25--88 only, so it is not complete
-controls-only trajectory evidence. `--cpp-stage-only` enables the ProcessControl
+paying full-run boundary-observer overhead. `--stage-force-diagnostics` is an
+opt-in Frida stage extension that adds read-only physical velocity snapshots
+around ProcessSuspension without enabling the expensive full ApplyForce hook;
+the separate full-force observer A/B is rejected when it creates timestep
+outliers. It remains diagnostic: the latest accepted window reached source tags
+25--88 only, so it is not complete controls-only trajectory evidence. `--cpp-stage-only` enables the ProcessControl
 and ProcessSuspension boundary streams without installing ProcessWheel; it is
 a lower-overhead causal diagnostic, still subject to the strict timer-step gate.
 Convert it with

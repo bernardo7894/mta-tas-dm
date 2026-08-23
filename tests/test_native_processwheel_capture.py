@@ -363,6 +363,24 @@ def test_cpp_processsuspension_boundary_is_explicit_diagnostic():
     assert "cpp_processsuspension_boundary" in source
 
 
+def test_stage_force_diagnostics_publishes_suspension_physical_boundary():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "stage-force",
+        install_wheel_hook=False,
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+        stage_force_diagnostics=True,
+    )
+    assert "const STAGE_FORCE_DIAGNOSTICS = true;" in script
+    assert "physicalBefore:this.nativeSuspensionPhysicalBefore" in script
+    assert "physicalAfter:STAGE_FORCE_DIAGNOSTICS" in script
+    assert "forceEvents:STAGE_FORCE_DIAGNOSTICS" in script
+    assert "applyForces:STAGE_FORCE_DIAGNOSTICS ? control.applyForces : null" in script
+    assert "nativeForceDuringSuspension" in script
+
+
 def test_reduced_stage_probe_keeps_collision_check_and_matrix_boundaries():
     tool = _load_tool()
     script = tool._native_script(

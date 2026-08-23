@@ -53,6 +53,7 @@ def _native_script(
     install_wheel_hook: bool = True,
     collision_diagnostics: bool = False,
     suspension_stage_only: bool = False,
+    stage_force_diagnostics: bool = False,
     static_skid_diagnostics: bool = False,
     capture_from_first_gas: bool = False,
     one_tick_config: dict[str, Any] | None = None,
@@ -73,6 +74,7 @@ const OUTPUT_LABEL = {_js_string(output_label)};
 const INSTALL_NATIVE_WHEEL_HOOK = {str(install_wheel_hook).lower()};
 const INSTALL_COLLISION_DIAGNOSTICS = {str(collision_diagnostics).lower()};
 const SUSPENSION_STAGE_ONLY = {str(suspension_stage_only).lower()};
+const STAGE_FORCE_DIAGNOSTICS = {str(stage_force_diagnostics).lower()};
 const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
 const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
 const PROCESSWHEEL_SOURCE_WINDOW = {json.dumps(list(processwheel_source_window) if processwheel_source_window else None)};
@@ -240,6 +242,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
     let oneTickInjected = false;
     const controlStates = new Map();
     let activeControlKey = null;
+    let activeSuspensionControlKey = null;
     const pendingCollisions = new Map();
     const f = p => {{ try {{ return p.readFloat(); }} catch(_) {{ return null; }} }};
     const u8 = p => {{ try {{ return p.readU8(); }} catch(_) {{ return null; }} }};
@@ -488,6 +491,7 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                             suspensionAtProcessControlEntry:INSTALL_COLLISION_DIAGNOSTICS ? suspensionSnapshot(vehicle) : null,
                             matrix:SUSPENSION_STAGE_ONLY ? matrixSnapshot(vehicle) : null,
                             suspensionProcess:null,
+                            suspensionForceEvents:[],
                             frictionProcess:null,
                             frictionForceEvents:[],
                             applyForces:[],
@@ -552,6 +556,8 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                             collisionCheck:control.collisionCheck,
                             processCollisionBoundaries:control.processCollisionBoundaries,
                             suspensionProcess:control.suspensionProcess,
+                            applyForces:STAGE_FORCE_DIAGNOSTICS ? control.applyForces : null,
+                            applyTurnForces:STAGE_FORCE_DIAGNOSTICS ? control.applyTurnForces : null,
                         }});
                         if (batch.length >= 4) flush();
                     }}
@@ -660,7 +666,12 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                     this.nativeSuspensionKey = vehicle.toString();
                     this.nativeSuspensionVehicle = vehicle;
                     this.nativeSuspensionBefore = suspensionSnapshot(vehicle);
+                    this.nativeSuspensionPhysicalBefore = STAGE_FORCE_DIAGNOSTICS
+                        ? physicalSnapshot(vehicle) : null;
                     this.nativeSuspensionCandidatesBefore = colPointArray(automobileCollisionPoints, 12);
+                    activeSuspensionControlKey = this.nativeSuspensionKey;
+                    const activeControl = controlStates.get(this.nativeSuspensionKey);
+                    if (activeControl) activeControl.suspensionForceEvents = [];
                 }} catch(_) {{}}
             }},
             onLeave() {{
@@ -672,8 +683,15 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                         after:suspensionSnapshot(this.nativeSuspensionVehicle),
                         automobileCollisionPointsBefore:this.nativeSuspensionCandidatesBefore,
                         automobileCollisionPointsAfter:colPointArray(automobileCollisionPoints, 12),
+                        physicalBefore:this.nativeSuspensionPhysicalBefore,
+                        physicalAfter:STAGE_FORCE_DIAGNOSTICS
+                            ? physicalSnapshot(this.nativeSuspensionVehicle) : null,
+                        forceEvents:STAGE_FORCE_DIAGNOSTICS
+                            ? (control.suspensionForceEvents || []) : null,
                     }};
                 }} catch(_) {{}}
+                if (activeSuspensionControlKey === this.nativeSuspensionKey)
+                    activeSuspensionControlKey = null;
             }}
         }});
         if (!SUSPENSION_STAGE_ONLY) {{
@@ -771,6 +789,9 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                     const sp = this.context.esp;
                     this.nativeForceVector = [f(sp.add(4)), f(sp.add(8)), f(sp.add(12))];
                     this.nativeForcePoint = [f(sp.add(16)), f(sp.add(20)), f(sp.add(24))];
+                    this.nativeForceDuringSuspension = STAGE_FORCE_DIAGNOSTICS
+                        && activeSuspensionControlKey === this.nativeForceKey;
+                    this.nativeForceReturnAddress = this.returnAddress.toString();
                 }} catch(_) {{}}
             }},
             onLeave() {{
@@ -778,13 +799,18 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
                 try {{
                     const control = controlStates.get(this.nativeForceKey);
                     const after = physicalSnapshot(this.nativeForceVehicle);
-                    if (control && snapshotChanged(this.nativeForceBefore, after))
-                        control.applyForces.push({{
+                    if (control && snapshotChanged(this.nativeForceBefore, after)) {{
+                        const event = {{
                             force:this.nativeForceVector,
                             point:this.nativeForcePoint,
                             before:this.nativeForceBefore,
                             after:after,
-                        }});
+                            returnAddress:this.nativeForceReturnAddress,
+                        }};
+                        control.applyForces.push(event);
+                        if (this.nativeForceDuringSuspension)
+                            control.suspensionForceEvents.push(event);
+                    }}
                 }} catch(_) {{}}
             }}
         }});
@@ -2188,6 +2214,14 @@ def main() -> int:
         help="with --collision-diagnostics, retain only ProcessEntityCollision/ProcessSuspension snapshots",
     )
     parser.add_argument(
+        "--stage-force-diagnostics",
+        action="store_true",
+        help=(
+            "in suspension-stage-only Frida captures, publish ProcessSuspension "
+            "entry/exit physical velocity state; diagnostic only"
+        ),
+    )
+    parser.add_argument(
         "--playback-output-name",
         help="temporarily select this Lua physics-output name in the local native_capture resource",
     )
@@ -2295,6 +2329,8 @@ def main() -> int:
             )
     if args.suspension_stage_only and (not args.collision_diagnostics or args.cpp_hook or args.timing_only):
         parser.error("--suspension-stage-only requires Frida --collision-diagnostics")
+    if args.stage_force_diagnostics and not args.suspension_stage_only:
+        parser.error("--stage-force-diagnostics requires --suspension-stage-only")
     if args.cpp_stage_only and args.timing_only:
         parser.error("--cpp-stage-only cannot be combined with --timing-only")
     server_commands_after: list[tuple[float, str]] = []
@@ -2667,6 +2703,7 @@ def main() -> int:
         if args.cpp_hook or args.timing_only or one_tick_config is not None else "",
         "collision_diagnostics": bool(args.collision_diagnostics),
         "suspension_stage_only": bool(args.suspension_stage_only),
+        "stage_force_diagnostics": bool(args.stage_force_diagnostics),
         "static_skid_diagnostics": bool(args.static_skid_diagnostics or args.cpp_static_skid_diagnostics),
         "capture_from_first_gas": bool(args.capture_from_first_gas),
         "cpp_static_skid_diagnostics": bool(args.cpp_static_skid_diagnostics),
@@ -2742,6 +2779,7 @@ def main() -> int:
         install_wheel_hook=not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
         collision_diagnostics=args.collision_diagnostics,
         suspension_stage_only=args.suspension_stage_only,
+        stage_force_diagnostics=args.stage_force_diagnostics,
         static_skid_diagnostics=args.static_skid_diagnostics,
         capture_from_first_gas=args.capture_from_first_gas,
         one_tick_config=one_tick_config,
@@ -2784,6 +2822,9 @@ def main() -> int:
             + ";\n"
             "const SUSPENSION_STAGE_ONLY = "
             + str(args.suspension_stage_only).lower()
+            + ";\n"
+            "const STAGE_FORCE_DIAGNOSTICS = "
+            + str(args.stage_force_diagnostics).lower()
             + ";\n"
             "const INSTALL_STATIC_SKID_DIAGNOSTICS = "
             + str(args.static_skid_diagnostics).lower()
