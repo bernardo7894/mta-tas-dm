@@ -1,0 +1,6 @@
+<meta>
+    <info type="script" name="[DIAG] Infernus Waterjump Standalone" author="MTA SA DM Standalone" version="1.0.0"/>
+    <map src="infernus-waterjump-diagnostic.map" dimension="0"/>
+    <script src="course_client.lua" type="client" cache="false"/>
+    <script src="course_server.lua" type="server"/>
+</meta>

@@ -1,0 +1,18 @@
+﻿<meta>
+    <info gamemodes="race" type="map" name="[DIAG] Infernus - Blue Ramp Course" author="MTA SA DM Standalone" version="2.1.0"/>
+    <map src="race-diagnostic-infernus-blue-ramp-course.map" dimension="0"/>
+    <script src="course_client.lua" type="client" cache="false"/>
+    <script src="course_server.lua" type="server"/>
+    <settings>
+        <setting name="#maxplayers" value="[ 1 ]"/>
+        <setting name="#ghostmode" value='[ &quot;true&quot; ]'/>
+        <setting name="#time" value="12:00"/>
+        <setting name="#weather" value="[ 0 ]"/>
+        <setting name="#gravity" value="[ 0.008000 ]"/>
+        <setting name="#waveheight" value="[ 0 ]"/>
+        <setting name="#locked_time" value="[ true ]"/>
+        <setting name="#duration" value="[ 1800 ]"/>
+        <setting name="#respawn" value='[ &quot;none&quot; ]'/>
+    </settings>
+</meta>
+
