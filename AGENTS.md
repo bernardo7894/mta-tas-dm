@@ -400,7 +400,11 @@ When `--frida-state-writer-source-window` and
 `--frida-state-writer-capture-untagged` are used, the same read-only writer
 route also records the public `SetElementVelocity` initializer separately from
 the angular setter; this startup pair is provenance-only and is rejected if its
-shared timer sample is outside `[0.45,0.55]`.
+shared timer sample is outside `[0.45,0.55]`. The bounded
+`--frida-processwheel-capture-untagged-after-writer` option additionally keeps
+at most the first four untagged ProcessWheel rows after the public angular
+writer and pairs their ProcessSuspension snapshot; it is explicitly for
+rejected post-writer stack decomposition and never feeds simulator state.
 The server `JOIN` event is watched both on stdout and the server log because
 redirected Debug-server stdout is not consistently flushed. Keep native rows separate from Lua
 `vehicleTelemetry` fields and preserve their provenance when merging diagnostic

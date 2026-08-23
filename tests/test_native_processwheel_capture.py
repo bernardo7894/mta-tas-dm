@@ -326,6 +326,27 @@ def test_frida_processwheel_can_skip_transmission_boundary_hook():
     assert "if (INSTALL_TRANSMISSION_DIAGNOSTICS)" in script
 
 
+def test_untagged_post_writer_processwheel_window_is_bounded_and_paired():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "post-writer-stack",
+        processwheel_source_window=(1, 3),
+        paired_processsuspension=True,
+        state_writer_source_window=(1, 3),
+        capture_untagged_state_writers=True,
+        capture_untagged_processwheel_after_writer=True,
+        writer_diagnostics=True,
+        transmission_diagnostics=False,
+    )
+    assert "const CAPTURE_UNTAGGED_PROCESSWHEEL_AFTER_WRITER = true;" in script
+    assert "allowPostWriterUntaggedWheel" in script
+    assert "postWriterUntaggedWheelCalls < 4" in script
+    assert "allowPostWriterUntaggedSuspension" in script
+    assert "postWriterUntaggedSuspensionCaptured" in script
+    assert "sourceTagInWheelWindow" in script
+
+
 def test_source_tag_order_diagnostic_is_read_only_and_bounded():
     tool = _load_tool()
     script = tool._native_script(
