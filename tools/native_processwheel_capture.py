@@ -59,6 +59,7 @@ def _native_script(
     skip_frida_bootstrap: bool = False,
     processwheel_source_window: tuple[int, int] | None = None,
     processcollision_source_window: tuple[int, int] | None = None,
+    processsuspension_source_window: tuple[int, int] | None = None,
     writer_diagnostics: bool = True,
     transmission_diagnostics: bool = True,
 ) -> str:
@@ -76,6 +77,7 @@ const INSTALL_STATIC_SKID_DIAGNOSTICS = {str(static_skid_diagnostics).lower()};
 const CAPTURE_FROM_FIRST_GAS = {str(capture_from_first_gas).lower()};
 const PROCESSWHEEL_SOURCE_WINDOW = {json.dumps(list(processwheel_source_window) if processwheel_source_window else None)};
 const PROCESSCOLLISION_SOURCE_WINDOW = {json.dumps(list(processcollision_source_window) if processcollision_source_window else None)};
+const PROCESSSUSPENSION_SOURCE_WINDOW = {json.dumps(list(processsuspension_source_window) if processsuspension_source_window else None)};
 const INSTALL_STATE_WRITER_DIAGNOSTICS = {str(writer_diagnostics).lower()};
 const INSTALL_TRANSMISSION_DIAGNOSTICS = {str(transmission_diagnostics).lower()};
 const ONE_TICK_CONFIG = {json.dumps(one_tick_config or {}, separators=(",", ":"))};
@@ -204,7 +206,8 @@ try {{
 }}
 
 if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
-    || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)) {{
+    || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)
+    || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)) {{
 (function installNativeWheelHook() {{
     const main = Process.mainModule;
     const processWheel = main.base.add({PROCESS_WHEEL_RVA});
@@ -904,6 +907,61 @@ if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS
             }}
         }});
         }}
+        }}
+        // Narrow source-window-only ProcessSuspension boundary. This avoids
+        // the full collision-diagnostics hook set while exposing the private
+        // compression/contact state immediately around the wheel stack.
+        if (Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW) && !INSTALL_COLLISION_DIAGNOSTICS) {{
+        Interceptor.attach(processSuspension, {{
+            onEnter() {{
+                const sourceTag = readNativeSourceTag();
+                if (sourceTag.frame === null
+                    || sourceTag.frame < PROCESSSUSPENSION_SOURCE_WINDOW[0]
+                    || sourceTag.frame > PROCESSSUSPENSION_SOURCE_WINDOW[1]) return;
+                if (CAPTURE_FROM_FIRST_GAS && !captureActive) return;
+                const vehicle = this.context.ecx;
+                try {{
+                    if (vehicle.add(0x22).readU16() !== 411) return;
+                    this.nativeNarrowSuspensionKey = vehicle.toString();
+                    this.nativeNarrowSuspensionVehicle = vehicle;
+                    this.nativeNarrowSuspensionBefore = suspensionSnapshot(vehicle);
+                    this.nativeNarrowSuspensionTagEntry = sourceTag.frame;
+                    this.nativeNarrowSuspensionTickEntry = sourceTag.tick;
+                }} catch (_) {{}}
+            }},
+            onLeave() {{
+                const key = this.nativeNarrowSuspensionKey;
+                if (!key) return;
+                try {{
+                    const tag = readNativeSourceTag();
+                    const boundary = {{
+                        sourceFrameTagEntry:this.nativeNarrowSuspensionTagEntry,
+                        sourceTickMsTagEntry:this.nativeNarrowSuspensionTickEntry,
+                        sourceFrameTagExit:tag.frame,
+                        sourceTickMsTagExit:tag.tick,
+                        before:this.nativeNarrowSuspensionBefore,
+                        after:suspensionSnapshot(this.nativeNarrowSuspensionVehicle),
+                    }};
+                    if (captureActive) {{
+                        batch.push({{
+                            source:'gta-native-process-suspension-boundary', label:OUTPUT_LABEL,
+                            processOrdinal:frame,
+                            sourceFrameTagEntry:boundary.sourceFrameTagEntry,
+                            sourceTickMsTagEntry:boundary.sourceTickMsTagEntry,
+                            sourceFrameTagExit:boundary.sourceFrameTagExit,
+                            sourceTickMsTagExit:boundary.sourceTickMsTagExit,
+                            gameFrame:gameFrameCounter.readU32(),
+                            gameTimeMs:gameTimeMs.readU32(),
+                            vehicle:key,
+                            timerStep:f(timerStep),
+                            processSuspension:boundary,
+                        }});
+                        if (batch.length >= 4) flush();
+                    }}
+                }} catch (_) {{}}
+                this.nativeNarrowSuspensionKey = null;
+            }}
+        }});
         }}
         // Reduced stage mode keeps only this narrow read-only boundary probe
         // in addition to ProcessEntityCollision/ProcessSuspension.  It shows
@@ -2087,6 +2145,16 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--frida-processsuspension-source-window",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        help=(
+            "capture a narrow Frida ProcessSuspension entry/exit boundary for source tags; "
+            "diagnostic only and incompatible with C++/timing/collision-stage routes"
+        ),
+    )
+    parser.add_argument(
         "--frida-processwheel-no-writer-diagnostics",
         action="store_true",
         help=(
@@ -2147,6 +2215,12 @@ def main() -> int:
             parser.error("invalid Frida ProcessCollision source window")
         if args.cpp_hook or args.timing_only:
             parser.error("--frida-processcollision-source-window requires the Frida route")
+    if args.frida_processsuspension_source_window:
+        start_frame, end_frame = args.frida_processsuspension_source_window
+        if start_frame < 1 or end_frame < start_frame:
+            parser.error("invalid Frida ProcessSuspension source window")
+        if args.cpp_hook or args.timing_only or args.collision_diagnostics or args.suspension_stage_only:
+            parser.error("--frida-processsuspension-source-window requires the reduced Frida wheel route")
     if args.cpp_minimal or args.cpp_no_matrix:
         args.cpp_hook = True
     playback_modes = sum(
@@ -2521,12 +2595,20 @@ def main() -> int:
             list(args.frida_processcollision_source_window)
             if args.frida_processcollision_source_window else None
         ),
+        "processsuspension_source_window": (
+            list(args.frida_processsuspension_source_window)
+            if args.frida_processsuspension_source_window else None
+        ),
         "native_state_writer_diagnostics": bool(
             args.frida_processwheel_source_window
             and not args.frida_processwheel_no_writer_diagnostics
         ),
         "native_transmission_diagnostics": not args.frida_processwheel_no_transmission_diagnostics,
-        "capture_level": "collision-stage" if args.suspension_stage_only else "wheel",
+        "capture_level": (
+            "suspension-boundary"
+            if args.frida_processsuspension_source_window
+            else "collision-stage" if args.suspension_stage_only else "wheel"
+        ),
         "install_wheel_hook": not (args.cpp_hook or args.timing_only or args.suspension_stage_only),
         "direct_observable": (
             "CAutomobile ProcessControlCollisionCheck/ProcessCollision/"
@@ -2665,6 +2747,10 @@ def main() -> int:
             tuple(args.frida_processcollision_source_window)
             if args.frida_processcollision_source_window else None
         ),
+        processsuspension_source_window=(
+            tuple(args.frida_processsuspension_source_window)
+            if args.frida_processsuspension_source_window else None
+        ),
         writer_diagnostics=not args.frida_processwheel_no_writer_diagnostics,
         transmission_diagnostics=not args.frida_processwheel_no_transmission_diagnostics,
     )
@@ -2677,7 +2763,11 @@ def main() -> int:
         bootstrap_module = importlib.util.module_from_spec(spec)
         sys.modules["mta_native_bootstrap"] = bootstrap_module
         spec.loader.exec_module(bootstrap_module)
-        marker = "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS) {"
+        marker = (
+            "if (INSTALL_NATIVE_WHEEL_HOOK || INSTALL_COLLISION_DIAGNOSTICS\n"
+            "    || Array.isArray(PROCESSWHEEL_SOURCE_WINDOW)\n"
+            "    || Array.isArray(PROCESSSUSPENSION_SOURCE_WINDOW)) {"
+        )
         native_only = (
             "const OUTPUT_LABEL = " + json.dumps(args.label) + ";\n"
             "const INSTALL_NATIVE_WHEEL_HOOK = "
@@ -2704,6 +2794,12 @@ def main() -> int:
             + json.dumps(
                 list(args.frida_processcollision_source_window)
                 if args.frida_processcollision_source_window else None
+            )
+            + ";\n"
+            "const PROCESSSUSPENSION_SOURCE_WINDOW = "
+            + json.dumps(
+                list(args.frida_processsuspension_source_window)
+                if args.frida_processsuspension_source_window else None
             )
             + ";\n"
             "const INSTALL_STATE_WRITER_DIAGNOSTICS = "

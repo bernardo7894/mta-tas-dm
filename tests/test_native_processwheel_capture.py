@@ -227,6 +227,23 @@ def test_frida_processwheel_source_window_limits_rows_without_disabling_hook():
     assert "if (INSTALL_NATIVE_WHEEL_HOOK)" in script
 
 
+def test_frida_processsuspension_source_window_adds_only_narrow_boundary():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "suspension-window",
+        processwheel_source_window=(20, 30),
+        processsuspension_source_window=(20, 30),
+        writer_diagnostics=False,
+        transmission_diagnostics=False,
+    )
+    assert "const PROCESSSUSPENSION_SOURCE_WINDOW = [20, 30];" in script
+    assert "source:'gta-native-process-suspension-boundary'" in script
+    assert "nativeNarrowSuspensionBefore" in script
+    assert "sourceFrameTagEntry:boundary.sourceFrameTagEntry" in script
+    assert "sourceTag.frame < PROCESSSUSPENSION_SOURCE_WINDOW[0]" in script
+
+
 def test_frida_processwheel_can_skip_writer_side_channel_hooks():
     tool = _load_tool()
     script = tool._native_script(

@@ -341,6 +341,9 @@ continuous trajectory evidence. The bounded wheel route also accepts
 `--frida-processcollision-source-window START END` to publish only the
 ProcessCollision entry/exit boundary for exact source tags; it distinguishes
 matrix integration from a velocity impulse and remains diagnostic.
+`--frida-processsuspension-source-window START END` similarly publishes only
+a source-tagged ProcessSuspension private compression/contact boundary for
+exact local comparison; it never injects that state.
 `--cpp-processcontrol-boundary` enables the matching direct
 `CAutomobile::ProcessControl` entry/exit stream (`.control.bin`), and
 `--cpp-processcontrol-source-window START END` limits it to a source-tagged
