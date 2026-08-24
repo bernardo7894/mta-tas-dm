@@ -393,6 +393,29 @@ def test_frida_stage_can_omit_heavy_processcollision_observers():
     assert "SUSPENSION_STAGE_ONLY && CAPTURE_STAGE_PROCESSCOLLISION)\n            || Array.isArray(PROCESSCOLLISION_SOURCE_WINDOW)" in script
 
 
+def test_frida_stage_can_capture_bounded_untagged_rows_before_source_tag():
+    tool = _load_tool()
+    script = tool._native_script(
+        Path("C:/mta"),
+        "turn-stage-startup-before-source",
+        collision_diagnostics=True,
+        suspension_stage_only=True,
+        capture_stage_processcollision=True,
+        capture_untagged_stage_before_source=True,
+        untagged_stage_min_game_time_ms=30000,
+        stage_source_window=(1, 3),
+        writer_diagnostics=False,
+        transmission_diagnostics=False,
+    )
+    assert "const CAPTURE_UNTAGGED_STAGE_BEFORE_SOURCE = true;" in script
+    assert "const UNTAGGED_STAGE_MIN_GAME_TIME_MS = 30000;" in script
+    assert "gta-native-process-stage-untagged-before-source" in script
+    assert "untaggedStageBeforeSourceCount < maxUntaggedStageBeforeSource" in script
+    assert "untagged-before-source-tag-processcontrol" in script
+    assert "suspensionAtProcessControlEntry:(INSTALL_COLLISION_DIAGNOSTICS" in script
+    assert "|| captureUntaggedStageBeforeSource)" in script
+
+
 def test_frida_stage_can_capture_bounded_untagged_rows_after_public_writer():
     tool = _load_tool()
     script = tool._native_script(

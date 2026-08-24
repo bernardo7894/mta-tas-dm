@@ -405,6 +405,14 @@ shared timer sample is outside `[0.45,0.55]`. The bounded
 at most the first four untagged ProcessWheel rows after the public angular
 writer and pairs their ProcessSuspension snapshot; it is explicitly for
 rejected post-writer stack decomposition and never feeds simulator state.
+The stage-only route also provides
+`--frida-stage-capture-untagged-before-source --frida-stage-untagged-min-game-time-ms`
+with a bounded `--frida-stage-source-window`: it retains at most sixteen
+read-only model-411 ProcessControl/ProcessCollision rows while the source-tag
+bridge is still untagged. Accepted timer rows from this option remain
+untagged lifecycle diagnostics, not exact source-frame trajectory evidence;
+post-public-writer rows must still be filtered by pointer and the strict timer
+policy, and a rejected `timerStep=3.0` row is provenance-only.
 The server `JOIN` event is watched both on stdout and the server log because
 redirected Debug-server stdout is not consistently flushed. Keep native rows separate from Lua
 `vehicleTelemetry` fields and preserve their provenance when merging diagnostic
