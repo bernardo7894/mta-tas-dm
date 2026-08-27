@@ -1,33 +1,40 @@
 # Etnies local test-server setup
 
-`tools/configure_etnies_test_servers.ps1` keeps the ordinary MTA 1.6 server and the local `mtasa-blue` Debug/native-capture server on the same Etnies cadence and deploys the same TAS resource to both.
+`tools/configure_etnies_test_servers.ps1` standardizes the ordinary MTA 1.6 server and the local `mtasa-blue` Debug/native-capture server for Etnies playback comparisons without replacing either server's existing TAS client variant.
 
-From the repository root, run an elevated PowerShell when the ordinary MTA server lives under `Program Files`:
+Run from the repository root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\configure_etnies_test_servers.ps1
 ```
 
-Defaults:
+Verified local defaults:
 
 - ordinary server: `C:\Program Files (x86)\MTA San Andreas 1.6\server`
 - debug/native server: `D:\Users\Bernardo\Documents\mtasa-blue\Bin\server`
 - server FPS limit: `100`
-- Race map: `race-dm-Skynetv5-EtniesII(fix)`
+- Race map resource name: `race-dm-Skynetv5-EtniesII(fix)`
+- the map is actually grouped under `mods\deathmatch\resources\[gamemodes]\[race]\[maps]\...` in both installations; the script searches by resource directory name rather than assuming it is directly below `resources`.
 
 The script:
 
-1. makes a one-time `.pre-etnies-test.bak` backup of each `mtaserver.conf`;
-2. sets `<fpslimit>` to `100` in both configurations;
-3. mirrors `new/tas` into both servers, so the same playback code and source-frame HUD are used;
-4. disables the ordinary `play` gamemode on the normal server;
-5. starts `mapmanager`, `race`, `tas`, and a small `etnies-startup` helper on the normal server; and
-6. has that helper ask `mapmanager` to launch Race with `race-dm-Skynetv5-EtniesII(fix)` when the server boots.
+1. verifies the exact Etnies resource exists in both server trees;
+2. sets both server `fpslimit` values to `100`;
+3. leaves the Debug/native server's other startup settings alone (including its capture-oriented `play` setup);
+4. adds only the HUD `meta.xml` entry and `frame_hud.lua` to each existing TAS resource instead of using `robocopy /MIR` or rewriting `client.lua`;
+5. configures the normal server to start `mapmanager`, `tas`, and `etnies-startup`, while leaving bare `race`/`play` startup disabled when those entries exist; and
+6. has `etnies-startup` call `mapmanager:changeGamemodeByName` so Race starts atomically with `race-dm-Skynetv5-EtniesII(fix)`.
 
-The source-frame HUD is enabled by default during TAS playback. It shows the source frame, total source frame count, and source timestamp. It can be disabled persistently with:
+This selective deployment matters because the Debug TAS copy can contain native-capture-specific local settings and code. Replacing the entire folder can destroy or temporarily undo active capture work.
+
+## Source-frame HUD
+
+During playback the top-center overlay shows:
 
 ```text
-/tascvar showPlaybackFrameHud false
+TAS SOURCE  <frame> / <total>   |   <source timestamp>
 ```
 
-The native-capture harness may re-prepare its TAS resource from this repository; that is expected and preserves the same HUD/code because the repository is the source for both environments.
+`frame_hud.lua` registers `showPlaybackFrameHud` after `client.lua` initializes. Because the main config loader has already run by then, the HUD reads that one persisted key from `@config.json` itself, using the same `enableUserConfig == true` condition. This keeps `/tascvar showPlaybackFrameHud false` persistent without modifying either TAS `client.lua` variant. The default is `true`.
+
+The Etnies reference file currently used locally reports `17781` frames and carries its original source tick on each frame, so the overlay is intended for source-frame comparison rather than video-time alignment.
