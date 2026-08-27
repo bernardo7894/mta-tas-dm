@@ -5,188 +5,143 @@ param(
     [int]$FpsLimit = 100,
     [string]$MapResource = 'race-dm-Skynetv5-EtniesII(fix)'
 )
-
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$TasSource = Join-Path $RepoRoot 'new\tas'
+$HudSource = Join-Path $RepoRoot 'new\tas\frame_hud.lua'
 
-function Backup-FileOnce {
-    param([Parameter(Mandatory)][string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { throw "Required file does not exist: $Path" }
+function Backup-Once([string]$Path, [string]$Suffix) {
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Missing required file: $Path" }
+    $bak = $Path + $Suffix
+    if (-not (Test-Path -LiteralPath $bak)) { Copy-Item -LiteralPath $Path -Destination $bak }
+}
+function Load-Config([string]$Path) {
+    $x = New-Object System.Xml.XmlDocument; $x.PreserveWhitespace = $true; $x.Load($Path)
+    if (-not $x.SelectSingleNode('/config')) { throw "Unexpected server config: $Path" }
+    return $x
+}
+function Set-Fps($x, [int]$Value) {
+    $n = $x.SelectSingleNode('/config/fpslimit')
+    if (-not $n) { $n=$x.CreateElement('fpslimit'); [void]$x.DocumentElement.AppendChild($n) }
+    $n.InnerText = [string]$Value
+}
+function Resource-Node($x, [string]$Name) {
+    foreach($n in $x.SelectNodes('/config/resource')) { if($n.GetAttribute('src') -eq $Name){ return $n } }
+    return $null
+}
+function Ensure-Startup($x, [string]$Name) {
+    $n=Resource-Node $x $Name
+    if(-not $n){ $n=$x.CreateElement('resource'); $n.SetAttribute('src',$Name); $n.SetAttribute('protected','0'); [void]$x.DocumentElement.AppendChild($n) }
+    $n.SetAttribute('startup','1')
+}
+function Disable-If-Present($x, [string]$Name) {
+    $n=Resource-Node $x $Name; if($n){ $n.SetAttribute('startup','0') }
+}
 
-    $backup = "$Path.pre-etnies-test.bak"
-    if (-not (Test-Path -LiteralPath $backup)) {
-        Copy-Item -LiteralPath $Path -Destination $backup
-        Write-Host "Backup: $backup"
+function Patch-TasHud([string]$ServerRoot) {
+    if(-not (Test-Path -LiteralPath $HudSource)){ throw "HUD source missing: $HudSource" }
+    $tas=Join-Path $ServerRoot 'mods\deathmatch\resources\tas'
+    $meta=Join-Path $tas 'meta.xml'
+    Backup-Once $meta '.pre-source-frame-hud.bak'
+    $enc=New-Object Text.UTF8Encoding($false)
+    $mt=[IO.File]::ReadAllText($meta)
+    if($mt -notmatch 'frame_hud\.lua'){
+        $m=[regex]::Match($mt,'(?m)^[ \t]*<script src="client\.lua" type="client" cache="false" />[ \t]*\r?\n')
+        if(!$m.Success){ throw "client.lua meta anchor missing: $meta" }
+        $nl=if($m.Value.EndsWith("`r`n")){"`r`n"}else{"`n"}
+        $mt=$mt.Insert($m.Index+$m.Length,'    <script src="frame_hud.lua" type="client" cache="false" />'+$nl)
+        [IO.File]::WriteAllText($meta,$mt,$enc)
     }
+    Copy-Item -LiteralPath $HudSource -Destination (Join-Path $tas 'frame_hud.lua') -Force
+    Write-Host "HUD patched without replacing TAS client variant: $tas"
 }
 
-function Load-ServerConfig {
-    param([Parameter(Mandatory)][string]$Path)
-    Backup-FileOnce -Path $Path
-
-    $doc = New-Object System.Xml.XmlDocument
-    $doc.PreserveWhitespace = $true
-    $doc.Load($Path)
-    if (-not $doc.SelectSingleNode('/config')) { throw "Unexpected MTA server config structure: $Path" }
-    return $doc
-}
-
-function Set-FpsLimit {
-    param(
-        [Parameter(Mandatory)][System.Xml.XmlDocument]$Document,
-        [Parameter(Mandatory)][int]$Value
-    )
-
-    $node = $Document.SelectSingleNode('/config/fpslimit')
-    if (-not $node) {
-        $node = $Document.CreateElement('fpslimit')
-        [void]$Document.DocumentElement.AppendChild($node)
-    }
-    $node.InnerText = [string]$Value
-}
-
-function Ensure-StartupResource {
-    param(
-        [Parameter(Mandatory)][System.Xml.XmlDocument]$Document,
-        [Parameter(Mandatory)][string]$Name,
-        [bool]$Startup = $true,
-        [bool]$Protected = $false
-    )
-
-    $node = $null
-    foreach ($candidate in $Document.SelectNodes('/config/resource')) {
-        if ($candidate.GetAttribute('src') -eq $Name) {
-            $node = $candidate
-            break
-        }
-    }
-
-    if (-not $node) {
-        $node = $Document.CreateElement('resource')
-        $node.SetAttribute('src', $Name)
-        [void]$Document.DocumentElement.AppendChild($node)
-    }
-
-    $node.SetAttribute('startup', $(if ($Startup) { '1' } else { '0' }))
-    $node.SetAttribute('protected', $(if ($Protected) { '1' } else { '0' }))
-}
-
-function Save-ServerConfig {
-    param(
-        [Parameter(Mandatory)][System.Xml.XmlDocument]$Document,
-        [Parameter(Mandatory)][string]$Path
-    )
-    $Document.Save($Path)
-    Write-Host "Configured: $Path"
-}
-
-function Mirror-TasResource {
-    param([Parameter(Mandatory)][string]$ServerRoot)
-
-    if (-not (Test-Path -LiteralPath $TasSource)) { throw "TAS source resource is missing: $TasSource" }
-
-    $resources = Join-Path $ServerRoot 'mods\deathmatch\resources'
-    if (-not (Test-Path -LiteralPath $resources)) { throw "MTA resources directory is missing: $resources" }
-
-    $destination = Join-Path $resources 'tas'
-    & robocopy $TasSource $destination /MIR /R:2 /W:2 | Out-Host
-    if ($LASTEXITCODE -ge 8) { throw "robocopy failed for $destination (exit code $LASTEXITCODE)" }
-    Write-Host "TAS deployed: $destination"
-}
-
-function Install-EtniesStartupResource {
-    param(
-        [Parameter(Mandatory)][string]$ServerRoot,
-        [Parameter(Mandatory)][string]$MapName
-    )
-
-    $resources = Join-Path $ServerRoot 'mods\deathmatch\resources'
-    $startupRoot = Join-Path $resources 'etnies-startup'
-    New-Item -ItemType Directory -Path $startupRoot -Force | Out-Null
-
-    $meta = @'
+function Install-Startup([string]$ServerRoot, [string]$MapName) {
+    $d=Join-Path $ServerRoot 'mods\deathmatch\resources\etnies-startup'
+    New-Item -ItemType Directory -Path $d -Force | Out-Null
+    $enc=New-Object Text.UTF8Encoding($false)
+    $meta=@'
 <meta>
-    <info author='local' name='Etnies test startup' type='script' />
-    <script src='server.lua' type='server' />
+    <info author="local" name="Etnies test startup" type="script" />
+    <include resource="mapmanager" />
+    <script src="server.lua" type="server" />
 </meta>
 '@
-    Set-Content -LiteralPath (Join-Path $startupRoot 'meta.xml') -Value $meta -Encoding UTF8
-
-    # The configured map name is local/trusted. Escape a possible apostrophe so
-    # it can be embedded safely in the generated Lua single-quoted string.
-    $escapedMapName = $MapName.Replace("'", "\'")
-    $serverLua = @"
-local targetMapName = '$escapedMapName'
+    [IO.File]::WriteAllText((Join-Path $d 'meta.xml'),$meta,$enc)
+    $escaped=$MapName.Replace("'","\'")
+    $lua=@"
+local targetMapName = '$escaped'
 local attempts = 0
-
+local function isTargetRunning()
+    local okMode, mode = pcall(function() return exports.mapmanager:getRunningGamemode() end)
+    local okMap, map = pcall(function() return exports.mapmanager:getRunningGamemodeMap() end)
+    return okMode and okMap and mode and map
+        and getResourceName(mode) == 'race' and getResourceName(map) == targetMapName
+end
 local function startEtnies()
     attempts = attempts + 1
-
+    if isTargetRunning() then return end
     local manager = getResourceFromName('mapmanager')
-    local race = getResourceFromName('race')
-    local targetMap = getResourceFromName(targetMapName)
-
-    if not manager or not race or not targetMap then
-        outputDebugString('[etnies-startup] waiting for mapmanager/race/' .. targetMapName, 2)
-    elseif getResourceState(manager) ~= 'running' then
-        outputDebugString('[etnies-startup] waiting for mapmanager to start', 2)
-    else
+    if manager and getResourceState(manager) == 'running' then
         local ok, changed = pcall(function()
-            return exports.mapmanager:changeGamemode(race, targetMap)
+            return exports.mapmanager:changeGamemodeByName('race', targetMapName, true)
         end)
         if ok and changed then
-            outputDebugString('[etnies-startup] Race started with ' .. targetMapName)
+            outputDebugString('[etnies-startup] requested Race + ' .. targetMapName)
             return
         end
-        outputDebugString('[etnies-startup] mapmanager changeGamemode did not succeed yet', 2)
     end
-
-    if attempts < 30 then
-        setTimer(startEtnies, 500, 1)
-    else
-        outputDebugString('[etnies-startup] failed to start Race + ' .. targetMapName, 1)
-    end
+    if attempts < 60 then setTimer(startEtnies, 500, 1)
+    else outputDebugString('[etnies-startup] failed to start Race + ' .. targetMapName, 1) end
 end
-
-addEventHandler('onResourceStart', resourceRoot, function()
-    setTimer(startEtnies, 500, 1)
-end)
+addEventHandler('onResourceStart', resourceRoot, function() setTimer(startEtnies, 500, 1) end)
 "@
-    Set-Content -LiteralPath (Join-Path $startupRoot 'server.lua') -Value $serverLua -Encoding UTF8
-    Write-Host "Installed startup resource: $startupRoot"
+    [IO.File]::WriteAllText((Join-Path $d 'server.lua'),$lua,$enc)
 }
 
-$liveConfigPath = Join-Path $LiveServerRoot 'mods\deathmatch\mtaserver.conf'
-$debugConfigPath = Join-Path $DebugServerRoot 'mods\deathmatch\mtaserver.conf'
-
-# Keep the ordinary server and mtasa-blue/native-capture server on the same
-# cadence as the 100 FPS Etnies source recording.
-$live = Load-ServerConfig -Path $liveConfigPath
-Set-FpsLimit -Document $live -Value $FpsLimit
-Ensure-StartupResource -Document $live -Name 'play' -Startup:$false
-Ensure-StartupResource -Document $live -Name 'mapmanager' -Startup:$true
-Ensure-StartupResource -Document $live -Name 'race' -Startup:$true
-Ensure-StartupResource -Document $live -Name 'tas' -Startup:$true
-Ensure-StartupResource -Document $live -Name 'etnies-startup' -Startup:$true
-Save-ServerConfig -Document $live -Path $liveConfigPath
-
-$debug = Load-ServerConfig -Path $debugConfigPath
-Set-FpsLimit -Document $debug -Value $FpsLimit
-Save-ServerConfig -Document $debug -Path $debugConfigPath
-
-# Use the same TAS code in both server trees. The native harness may prepare
-# its TAS folder again from this repository later; that preserves equivalence.
-Mirror-TasResource -ServerRoot $LiveServerRoot
-Mirror-TasResource -ServerRoot $DebugServerRoot
-Install-EtniesStartupResource -ServerRoot $LiveServerRoot -MapName $MapResource
-
-$liveMapPath = Join-Path (Join-Path $LiveServerRoot 'mods\deathmatch\resources') $MapResource
-if (-not (Test-Path -LiteralPath $liveMapPath)) {
-    Write-Warning "The requested Etnies resource was not found at $liveMapPath. Startup is configured, but the map cannot be selected until that resource exists."
+function Find-Map([string]$ServerRoot, [string]$Name) {
+    $resources=Join-Path $ServerRoot 'mods\deathmatch\resources'
+    $matches=@(Get-ChildItem -LiteralPath $resources -Directory -Recurse | Where-Object { $_.Name -eq $Name })
+    if($matches.Count -eq 0){ throw "Map resource '$Name' not found under $resources" }
+    foreach($m in $matches){ Write-Host "Map resource: $($m.FullName)" }
 }
+
+$liveConfig=Join-Path $LiveServerRoot 'mods\deathmatch\mtaserver.conf'
+$debugConfig=Join-Path $DebugServerRoot 'mods\deathmatch\mtaserver.conf'
+
+Find-Map $LiveServerRoot $MapResource
+Find-Map $DebugServerRoot $MapResource
+
+Backup-Once $liveConfig '.pre-etnies-test.bak'
+$live=Load-Config $liveConfig
+Set-Fps $live $FpsLimit
+Ensure-Startup $live 'mapmanager'
+Ensure-Startup $live 'tas'
+Ensure-Startup $live 'etnies-startup'
+# Let mapmanager start Race atomically with the requested map. Do not boot bare Race.
+Disable-If-Present $live 'race'
+Disable-If-Present $live 'play'
+$live.Save($liveConfig)
+Write-Host "Configured live server: fpslimit=$FpsLimit"
+
+$debug=Load-Config $debugConfig
+$debugFps=$debug.SelectSingleNode('/config/fpslimit')
+if(-not $debugFps -or $debugFps.InnerText -ne [string]$FpsLimit){
+    Backup-Once $debugConfig '.pre-etnies-test.bak'
+    Set-Fps $debug $FpsLimit
+    $debug.Save($debugConfig)
+    Write-Host "Configured debug server: fpslimit=$FpsLimit"
+} else {
+    Write-Host "Debug server already uses fpslimit=$FpsLimit; other settings preserved"
+}
+
+# The two deployments intentionally keep their existing client.lua variants.
+# Only the meta entry/HUD file are added; client.lua is never rewritten.
+Patch-TasHud $LiveServerRoot
+Patch-TasHud $DebugServerRoot
+Install-Startup $LiveServerRoot $MapResource
 
 Write-Host ''
 Write-Host "Done. Both server configs use fpslimit=$FpsLimit."
-Write-Host 'The normal server has play disabled and starts mapmanager, race, tas, and etnies-startup.'
-Write-Host 'TAS showPlaybackFrameHud defaults to true; use /tascvar showPlaybackFrameHud false to hide it.'
+Write-Host "The normal server boots Race with $MapResource through etnies-startup."
+Write-Host 'The debug/native server keeps its existing play/capture configuration.'
+Write-Host 'The source-frame HUD defaults on; /tascvar showPlaybackFrameHud false persists normally.'
