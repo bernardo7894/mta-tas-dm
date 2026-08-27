@@ -12,10 +12,7 @@ $TasSource = Join-Path $RepoRoot 'new\tas'
 
 function Backup-FileOnce {
     param([Parameter(Mandatory)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        throw "Required file does not exist: $Path"
-    }
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Required file does not exist: $Path" }
 
     $backup = "$Path.pre-etnies-test.bak"
     if (-not (Test-Path -LiteralPath $backup)) {
@@ -26,14 +23,12 @@ function Backup-FileOnce {
 
 function Load-ServerConfig {
     param([Parameter(Mandatory)][string]$Path)
-
     Backup-FileOnce -Path $Path
+
     $doc = New-Object System.Xml.XmlDocument
     $doc.PreserveWhitespace = $true
     $doc.Load($Path)
-    if (-not $doc.SelectSingleNode('/config')) {
-        throw "Unexpected MTA server config structure: $Path"
-    }
+    if (-not $doc.SelectSingleNode('/config')) { throw "Unexpected MTA server config structure: $Path" }
     return $doc
 }
 
@@ -82,7 +77,6 @@ function Save-ServerConfig {
         [Parameter(Mandatory)][System.Xml.XmlDocument]$Document,
         [Parameter(Mandatory)][string]$Path
     )
-
     $Document.Save($Path)
     Write-Host "Configured: $Path"
 }
@@ -90,21 +84,14 @@ function Save-ServerConfig {
 function Mirror-TasResource {
     param([Parameter(Mandatory)][string]$ServerRoot)
 
-    if (-not (Test-Path -LiteralPath $TasSource)) {
-        throw "TAS source resource is missing: $TasSource"
-    }
+    if (-not (Test-Path -LiteralPath $TasSource)) { throw "TAS source resource is missing: $TasSource" }
 
     $resources = Join-Path $ServerRoot 'mods\deathmatch\resources'
-    if (-not (Test-Path -LiteralPath $resources)) {
-        throw "MTA resources directory is missing: $resources"
-    }
+    if (-not (Test-Path -LiteralPath $resources)) { throw "MTA resources directory is missing: $resources" }
 
     $destination = Join-Path $resources 'tas'
     & robocopy $TasSource $destination /MIR /R:2 /W:2 | Out-Host
-    $rc = $LASTEXITCODE
-    if ($rc -ge 8) {
-        throw "robocopy failed for $destination (exit code $rc)"
-    }
+    if ($LASTEXITCODE -ge 8) { throw "robocopy failed for $destination (exit code $LASTEXITCODE)" }
     Write-Host "TAS deployed: $destination"
 }
 
@@ -120,47 +107,49 @@ function Install-EtniesStartupResource {
 
     $meta = @'
 <meta>
-    <info author="local" name="Etnies test startup" type="script" />
-    <script src="server.lua" type="server" />
+    <info author='local' name='Etnies test startup' type='script' />
+    <script src='server.lua' type='server' />
 </meta>
 '@
     Set-Content -LiteralPath (Join-Path $startupRoot 'meta.xml') -Value $meta -Encoding UTF8
 
-    $escapedMapName = $MapName.Replace('\\', '\\\\').Replace('"', '\\"')
+    # The configured map name is local/trusted. Escape a possible apostrophe so
+    # it can be embedded safely in the generated Lua single-quoted string.
+    $escapedMapName = $MapName.Replace("'", "\'")
     $serverLua = @"
-local targetMapName = "$escapedMapName"
+local targetMapName = '$escapedMapName'
 local attempts = 0
 
 local function startEtnies()
     attempts = attempts + 1
 
-    local manager = getResourceFromName("mapmanager")
-    local race = getResourceFromName("race")
+    local manager = getResourceFromName('mapmanager')
+    local race = getResourceFromName('race')
     local targetMap = getResourceFromName(targetMapName)
 
     if not manager or not race or not targetMap then
-        outputDebugString("[etnies-startup] waiting for mapmanager/race/" .. targetMapName, 2)
-    elseif getResourceState(manager) ~= "running" then
-        outputDebugString("[etnies-startup] waiting for mapmanager to start", 2)
+        outputDebugString('[etnies-startup] waiting for mapmanager/race/' .. targetMapName, 2)
+    elseif getResourceState(manager) ~= 'running' then
+        outputDebugString('[etnies-startup] waiting for mapmanager to start', 2)
     else
         local ok, changed = pcall(function()
             return exports.mapmanager:changeGamemode(race, targetMap)
         end)
         if ok and changed then
-            outputDebugString("[etnies-startup] Race started with " .. targetMapName)
+            outputDebugString('[etnies-startup] Race started with ' .. targetMapName)
             return
         end
-        outputDebugString("[etnies-startup] mapmanager changeGamemode did not succeed yet", 2)
+        outputDebugString('[etnies-startup] mapmanager changeGamemode did not succeed yet', 2)
     end
 
     if attempts < 30 then
         setTimer(startEtnies, 500, 1)
     else
-        outputDebugString("[etnies-startup] failed to start Race + " .. targetMapName, 1)
+        outputDebugString('[etnies-startup] failed to start Race + ' .. targetMapName, 1)
     end
 end
 
-addEventHandler("onResourceStart", resourceRoot, function()
+addEventHandler('onResourceStart', resourceRoot, function()
     setTimer(startEtnies, 500, 1)
 end)
 "@
@@ -171,8 +160,8 @@ end)
 $liveConfigPath = Join-Path $LiveServerRoot 'mods\deathmatch\mtaserver.conf'
 $debugConfigPath = Join-Path $DebugServerRoot 'mods\deathmatch\mtaserver.conf'
 
-# Keep the ordinary server and the mtasa-blue/native-capture server on the
-# same 100 FPS cadence used by the Etnies source recording.
+# Keep the ordinary server and mtasa-blue/native-capture server on the same
+# cadence as the 100 FPS Etnies source recording.
 $live = Load-ServerConfig -Path $liveConfigPath
 Set-FpsLimit -Document $live -Value $FpsLimit
 Ensure-StartupResource -Document $live -Name 'play' -Startup:$false
@@ -186,20 +175,18 @@ $debug = Load-ServerConfig -Path $debugConfigPath
 Set-FpsLimit -Document $debug -Value $FpsLimit
 Save-ServerConfig -Document $debug -Path $debugConfigPath
 
-# Put the exact same TAS code, including the default source-frame HUD, in both
-# server resource trees.  The native harness may subsequently prepare its TAS
-# folder again from this same repository, so the copies remain equivalent.
+# Use the same TAS code in both server trees. The native harness may prepare
+# its TAS folder again from this repository later; that preserves equivalence.
 Mirror-TasResource -ServerRoot $LiveServerRoot
 Mirror-TasResource -ServerRoot $DebugServerRoot
-
 Install-EtniesStartupResource -ServerRoot $LiveServerRoot -MapName $MapResource
 
 $liveMapPath = Join-Path (Join-Path $LiveServerRoot 'mods\deathmatch\resources') $MapResource
 if (-not (Test-Path -LiteralPath $liveMapPath)) {
-    Write-Warning "The requested Etnies resource was not found at $liveMapPath. The startup resource is installed, but it cannot select the map until that resource exists."
+    Write-Warning "The requested Etnies resource was not found at $liveMapPath. Startup is configured, but the map cannot be selected until that resource exists."
 }
 
 Write-Host ''
 Write-Host "Done. Both server configs use fpslimit=$FpsLimit."
-Write-Host "The normal server has play disabled and starts mapmanager, race, tas, and etnies-startup."
-Write-Host "TAS showPlaybackFrameHud defaults to true; use /tascvar showPlaybackFrameHud false to hide it."
+Write-Host 'The normal server has play disabled and starts mapmanager, race, tas, and etnies-startup.'
+Write-Host 'TAS showPlaybackFrameHud defaults to true; use /tascvar showPlaybackFrameHud false to hide it.'
