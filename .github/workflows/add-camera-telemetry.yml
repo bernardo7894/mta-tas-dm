@@ -18,7 +18,9 @@ jobs:
           fetch-depth: 0
 
       - name: Patch TAS camera telemetry
-        run: python tools/apply_camera_telemetry_patch.py
+        run: |
+          python tools/fix_camera_patch_helper.py
+          python tools/apply_camera_telemetry_patch.py
 
       - name: Validate Lua syntax and patch invariants
         run: |
