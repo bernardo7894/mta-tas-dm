@@ -1,5 +1,18 @@
 # Physics analysis export
 
+## Separate synchronized camera export
+
+Camera telemetry is deliberately stored separately from physics telemetry. Every TAS source frame samples `getCameraMatrix()` from the same `record_state()` call as vehicle state and controls, then `/savecamera <name>` writes `<name>.camera.jsonl`. Each camera frame carries the same source frame number and TAS tick, plus camera position, look-at point, roll, FOV, target metadata, distance to the recorded vehicle, and vehicle-local camera/look-at coordinates.
+
+Commands:
+
+- `/savecamera <name>` saves only `<name>.camera.jsonl`.
+- `/saveboth <name>` remains backward-compatible and saves only `<name>.tas` + `<name>.physics.jsonl`.
+- `/saveall <name>` saves the TAS, physics, and camera files.
+- `/recordplayback <name>` refreshes both `<name>.physics.jsonl` and `<name>.camera.jsonl` from the replayed source frames.
+
+The camera stream is not embedded in `.physics.jsonl`, and the legacy `.tas` serialization is unchanged.
+
 This extends the `new/tas` version of **mta-tas-dm** without changing its
 existing `.tas` save/load format or normal playback behavior.
 

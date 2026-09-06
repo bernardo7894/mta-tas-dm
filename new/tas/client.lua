@@ -243,7 +243,9 @@ tas.registered_commands = {
 	load_record = "loadr",
 	save_record = "saver",
 	save_analysis = "savephysics",
+	save_camera = "savecamera",
 	save_both = "saveboth",
+	save_all = "saveall",
 	record_playback = "recordplayback",
 	resume = "resume",
 	seek = "seek",
@@ -755,7 +757,9 @@ function tas.automation_start_playback()
 
 	automation.playbackTimer = nil
 	local outputFile = (tas.settings.usePrivateFolder == true and "@" or "") .. "saves/" .. automation.outputName .. ".physics.jsonl"
+	local cameraOutputFile = (tas.settings.usePrivateFolder == true and "@" or "") .. "saves/" .. automation.outputName .. ".camera.jsonl"
 	if fileExists(outputFile) then fileDelete(outputFile) end
+	if fileExists(cameraOutputFile) then fileDelete(cameraOutputFile) end
 	executeCommandHandler(tas.registered_commands.record_playback, automation.outputName)
 	if tas.var.playback_recording then
 		tas.automation_report("capturing", "Playback is running while telemetry is captured")
@@ -862,7 +866,7 @@ function tas.capture_playback_frame(vehicle, frame_data, deltaTime)
 	end
 	tas.var.playback_recording_last_tick = capture_tick
 
-	local _, live_p, live_r, live_v, live_rv, _, _, _, _, _, _, analysis = tas.record_state(vehicle)
+	local _, live_p, live_r, live_v, live_rv, _, _, _, _, _, _, analysis, camera = tas.record_state(vehicle)
 	analysis.dt = deltaTime
 	analysis.fps = (deltaTime > 0 and 1000 / deltaTime) or 0
 	if not analysis.groundContacts then
@@ -870,6 +874,7 @@ function tas.capture_playback_frame(vehicle, frame_data, deltaTime)
 	end
 	analysis.playbackCapture = true
 	frame_data.x = frame_data.x or {}
+	frame_data.c = camera
 	frame_data.x.matrix = analysis.matrix
 	-- Controls-only playback keeps the serialized TAS p/v/rv fields as the
 	-- reference trajectory. Preserve the independently observed live values in
@@ -910,15 +915,17 @@ function tas.finish_playback_recording(completed)
 
 	if name then
 		executeCommandHandler(tas.registered_commands.save_analysis, name)
+		executeCommandHandler(tas.registered_commands.save_camera, name)
 	end
 	tas.analysis.export_frame_limit = nil
 
 	local automation = tas.var.automation
 	if automation and automation.outputName == name then
 		local outputFile = (tas.settings.usePrivateFolder == true and "@" or "") .. "saves/" .. name .. ".physics.jsonl"
-		local saved = completed ~= false and fileExists(outputFile)
+		local cameraOutputFile = (tas.settings.usePrivateFolder == true and "@" or "") .. "saves/" .. name .. ".camera.jsonl"
+		local saved = completed ~= false and fileExists(outputFile) and fileExists(cameraOutputFile)
 		local state = saved and "completed" or (completed == false and "cancelled" or "failed")
-		local message = saved and "Playback capture saved" or (completed == false and "Playback capture stopped" or "Physics export was not created")
+		local message = saved and "Playback physics + camera capture saved" or (completed == false and "cancelled" or "Physics/camera export was not created")
 		tas.automation_report(state, message)
 		tas.var.automation = nil
 	end
@@ -1683,6 +1690,21 @@ function tas.commands(cmd, ...)
 		executeCommandHandler(tas.registered_commands.save_record, args[1])
 		executeCommandHandler(tas.registered_commands.save_analysis, args[1])
 
+
+	-- // Save All (legacy TAS + physics + camera)
+	elseif cmd == tas.registered_commands.save_all then
+
+		if args[1] == nil then
+			tas.prompt("Saving all failed, please specify a $$name ##for your files!", 255, 100, 100)
+			tas.prompt("Example: $$/saveall infernus_reference", 255, 100, 100)
+			return
+		end
+		if #tas.data == 0 then tas.prompt("Saving failed, no $$data ##recorded!", 255, 100, 100) return end
+
+		executeCommandHandler(tas.registered_commands.save_record, args[1])
+		executeCommandHandler(tas.registered_commands.save_analysis, args[1])
+		executeCommandHandler(tas.registered_commands.save_camera, args[1])
+
 	-- // Save Physics Analysis
 	elseif cmd == tas.registered_commands.save_analysis then
 
@@ -1766,6 +1788,68 @@ function tas.commands(cmd, ...)
 		
 		tas.prompt("Physics telemetry saved ".. (tas.settings.usePrivateFolder == true and "$$privately ##" or "") .. "to $$'saves/"..args[1]..".physics.jsonl'##!", 255, 255, 100)
 	
+
+	-- // Save Camera Reference
+	elseif cmd == tas.registered_commands.save_camera then
+
+		if args[1] == nil then
+			tas.prompt("Camera export failed, please specify a $$name ##for your file!", 255, 100, 100)
+			tas.prompt("Example: $$/savecamera infernus_reference", 255, 100, 100)
+			return
+		end
+		if #tas.data == 0 then tas.prompt("Camera export failed, no $$data ##recorded!", 255, 100, 100) return end
+
+		local isPrivated = (tas.settings.usePrivateFolder == true and "@") or ""
+		local fileTarget = isPrivated .. "saves/" .. args[1] .. ".camera.jsonl"
+
+		if tas.settings.useWarnings then
+			if fileExists(fileTarget) and not tas.timers.warnCameraSave then
+				tas.timers.warnCameraSave = setTimer(function() tas.timers.warnCameraSave = nil end, 5000, 1)
+				tas.prompt("Existing camera export $$'"..args[1]..".camera.jsonl' ##found! Use the command again to overwrite it.", 255, 100, 100)
+				return
+			end
+		end
+
+		local save_file = fileCreate(fileTarget)
+		if not save_file then
+			tas.prompt("Camera export failed, couldn't create $$'"..fileTarget.."'##!", 255, 100, 100)
+			return
+		end
+
+		local frame_limit = tas.analysis.export_frame_limit or #tas.data
+		local recorded_at = tas.analysis.metadata and tas.analysis.metadata.recordedAtUtc or os.date("!%Y-%m-%dT%H:%M:%SZ")
+		local metadata = {
+			format = "mta-tas-dm-camera-jsonl",
+			formatVersion = 1,
+			recordedAtUtc = recorded_at,
+			frameCount = frame_limit,
+			author = string_gsub(getPlayerName(localPlayer), "#%x%x%x%x%x%x", ""),
+			source = "getCameraMatrix sampled inside TAS record_state",
+			synchronizedBy = "TAS source frame and tick",
+		}
+		local metadata_line = tas.json_object({type = "metadata", data = metadata})
+		if metadata_line then fileWrite(save_file, metadata_line .. "\n") end
+
+		local written = 0
+		for i=1, frame_limit do
+			local run = tas.data[i]
+			if run and run.c then
+				local line = tas.json_object({type = "frame", frame = i, tick = run.tick, camera = run.c})
+				if line then
+					fileWrite(save_file, line .. "\n")
+					written = written + 1
+				end
+			end
+		end
+
+		fileClose(save_file)
+		tas.timers.warnCameraSave = nil
+		if written ~= frame_limit then
+			tas.prompt("Camera telemetry saved, but only $$"..written.."/"..frame_limit.." ##frames contained camera samples.", 255, 180, 100)
+		else
+			tas.prompt("Camera telemetry saved ".. (tas.settings.usePrivateFolder == true and "$$privately ##" or "") .. "to $$'saves/"..args[1]..".camera.jsonl'##!", 255, 255, 100)
+		end
+
 	-- // Load Recording
 	elseif cmd == tas.registered_commands.load_record then
 	
@@ -2128,7 +2212,9 @@ function tas.commands(cmd, ...)
 			tas.settings.rewindingKey:upper().." $$- ##rewind during recording $$| ##L-SHIFT $$- ##x2 $$| ##L-ALT $$- ##x0.5",
 			"/"..tas.registered_commands.save_record.." $$| ##/"..tas.registered_commands.load_record.." $$- ##save $$| ##load a TAS file",
 			"/"..tas.registered_commands.save_analysis.." [name] $$- ##export extended physics telemetry (JSONL)",
-			"/"..tas.registered_commands.save_both.." [name] $$- ##save both TAS and physics files",
+			"/"..tas.registered_commands.save_camera.." [name] $$- ##export synchronized camera telemetry (JSONL)",
+			"/"..tas.registered_commands.save_both.." [name] $$- ##save TAS and physics files (legacy behavior)",
+			"/"..tas.registered_commands.save_all.." [name] $$- ##save TAS, physics and camera files",
 			"/"..tas.registered_commands.record_playback.." [name] $$- ##play back and capture ground-contact telemetry",
 			"/"..tas.registered_commands.autotas.." $$- ##toggle automatic record/playback",
 			"/"..tas.registered_commands.clear_all.." $$- ##clear all cached data",
@@ -2388,7 +2474,7 @@ function tas.render_record(deltaTime)
 			
 		end
 	
-		local tick, p, r, v, rv, health, model, nos, keys, ground, analog, analysis = tas.record_state(vehicle)
+		local tick, p, r, v, rv, health, model, nos, keys, ground, analog, analysis, camera = tas.record_state(vehicle)
 		local marked = nil
 		
 		local gamespeed = (tas.settings.useGameSpeed == true and getGameSpeed()) or 1
@@ -2453,6 +2539,7 @@ function tas.render_record(deltaTime)
 			g = ground,
 			a = analog,
 			x = analysis, -- extended physics-analysis state; ignored by normal TAS playback
+			c = camera, -- camera reference state; saved separately as .camera.jsonl
 			marked = marked,
 		})
 		
@@ -2470,6 +2557,63 @@ function tas.render_record(deltaTime)
 		tas.prompt("Recording stopped due to an error! ($$#"..tostring(#tas.data).." ##frames)", 255, 100, 100)
 					
 	end
+end
+
+
+-- // Camera reference telemetry. This is sampled from record_state so camera,
+-- // controls and vehicle state share the exact same TAS source frame.
+function tas.camera_world_to_vehicle_local(matrix, point)
+	if not matrix or not point or not matrix[1] or not matrix[2] or not matrix[3] or not matrix[4] then return nil end
+	local dx = point[1] - matrix[4][1]
+	local dy = point[2] - matrix[4][2]
+	local dz = point[3] - matrix[4][3]
+	return {
+		dx * matrix[1][1] + dy * matrix[1][2] + dz * matrix[1][3],
+		dx * matrix[2][1] + dy * matrix[2][2] + dz * matrix[2][3],
+		dx * matrix[3][1] + dy * matrix[3][2] + dz * matrix[3][3],
+	}
+end
+
+function tas.capture_camera_state(vehicle, matrix)
+	local cx, cy, cz, lx, ly, lz, roll, fov = getCameraMatrix()
+	if not cx then return nil end
+
+	local camera_position = {cx, cy, cz}
+	local look_at = {lx, ly, lz}
+	local vehicle_matrix = matrix or (vehicle and getElementMatrix(vehicle, false)) or nil
+	local target = getCameraTarget()
+	local target_info = nil
+	if target and isElement(target) then
+		target_info = {
+			elementType = getElementType(target),
+			model = getElementModel(target),
+			isLocalPlayer = target == localPlayer,
+			isRecordedVehicle = target == vehicle,
+		}
+	end
+
+	local vehicle_position = nil
+	local distance_to_vehicle = nil
+	if vehicle and isElement(vehicle) then
+		local vx, vy, vz = getElementPosition(vehicle)
+		vehicle_position = {vx, vy, vz}
+		local dx, dy, dz = cx - vx, cy - vy, cz - vz
+		distance_to_vehicle = math.sqrt(dx * dx + dy * dy + dz * dz)
+	end
+
+	return {
+		position = camera_position,
+		lookAt = look_at,
+		roll = roll,
+		fov = fov,
+		target = target_info,
+		vehiclePosition = vehicle_position,
+		distanceToVehicle = distance_to_vehicle,
+		relativeToVehicle = vehicle_matrix and {
+			position = tas.camera_world_to_vehicle_local(vehicle_matrix, camera_position),
+			lookAt = tas.camera_world_to_vehicle_local(vehicle_matrix, look_at),
+		} or nil,
+	}
 end
 
 -- // Recording vehicle state
@@ -2559,6 +2703,7 @@ function tas.record_state(vehicle)
 		end
 		local ground_contacts = tas.capture_ground_contacts(vehicle, matrix, wheels, false)
 		local steering_telemetry = tas.capture_steering_telemetry(controls, analog_controls, tas.var.physics_handling, current_tick)
+		local camera = tas.capture_camera_state(vehicle, matrix)
 		local analysis = {
 			matrix = matrix,
 			wheels = wheels,
@@ -2572,7 +2717,7 @@ function tas.record_state(vehicle)
 			),
 		}
 		
-		return real_time, p, r, v, rv, health, model, nos, keys, ground, analog, analysis
+		return real_time, p, r, v, rv, health, model, nos, keys, ground, analog, analysis, camera
 					
 	end
 end

@@ -10,3 +10,5 @@ Open `client.lua` for settings and helpful info.
 Also check out `server.lua` to configure your serverside saving of .TAS files.
 
 I decided to make a revamp of it, recommended to use this one because the older version can produce weird spacing between frames.
+
+Camera reference telemetry can be exported separately with `/savecamera <name>` (`<name>.camera.jsonl`), while `/saveall <name>` saves TAS + physics + camera. `/saveboth` keeps its legacy TAS + physics behavior.
