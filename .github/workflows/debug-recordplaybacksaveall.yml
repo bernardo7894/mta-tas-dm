@@ -1,0 +1,80 @@
+name: Apply recordplaybacksaveall diagnostics
+
+'on':
+  push:
+    paths:
+      - .github/workflows/debug-recordplaybacksaveall.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Patch TAS command diagnostics
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('new/tas/client.lua')
+          raw = p.read_bytes()
+          nl = '\r\n' if b'\r\n' in raw else '\n'
+          text = raw.decode().replace('\r\n','\n')
+          def once(old,new,label):
+              global text
+              n=text.count(old)
+              if n!=1: raise SystemExit(f'{label}: expected 1 match, found {n}')
+              text=text.replace(old,new,1)
+
+          once(
+              '}\n\t\t\t\n-- // Registered commands (edit to your liking)\n',
+              '}\n\n-- Build marker for diagnosing whether the live client has the latest resource.\ntas.build = "2026-09-06-rpsaveall-v2"\n\t\t\t\n-- // Registered commands (edit to your liking)\n',
+              'build marker')
+          once(
+              '\trecord_playback_save_all = "recordplaybacksaveall",\n',
+              '\trecord_playback_save_all = "recordplaybacksaveall",\n\trecord_playback_save_all_alias = "rpsaveall",\n\tversion = "tasversion",\n',
+              'aliases')
+          once(
+              '\telseif cmd == tas.registered_commands.record_playback or cmd == tas.registered_commands.record_playback_save_all then\n\n\t\tlocal save_all_on_finish = cmd == tas.registered_commands.record_playback_save_all\n',
+              '\telseif cmd == tas.registered_commands.record_playback or cmd == tas.registered_commands.record_playback_save_all or cmd == tas.registered_commands.record_playback_save_all_alias then\n\n\t\tlocal save_all_on_finish = cmd == tas.registered_commands.record_playback_save_all or cmd == tas.registered_commands.record_playback_save_all_alias\n',
+              'command dispatch')
+          once(
+              '\t\t\tlocal example_command = save_all_on_finish and tas.registered_commands.record_playback_save_all or tas.registered_commands.record_playback\n',
+              '\t\t\tlocal example_command = save_all_on_finish and tas.registered_commands.record_playback_save_all_alias or tas.registered_commands.record_playback\n',
+              'example command')
+          once(
+              '\t-- // Record a playback with fresh telemetry; optionally save all outputs at normal completion\n',
+              '\t-- // Report the exact client build so updater/deployment problems are visible in-game.\n\telseif cmd == tas.registered_commands.version then\n\t\ttas.prompt("TAS build: $$"..tostring(tas.build).."##", 100, 255, 100)\n\n\t-- // Record a playback with fresh telemetry; optionally save all outputs at normal completion\n',
+              'version command branch')
+          once(
+              '\t\t\t"/"..tas.registered_commands.record_playback_save_all.." [name] $$- ##record playback, then save TAS + physics + camera when it ends",\n',
+              '\t\t\t"/"..tas.registered_commands.record_playback_save_all.." [name] $$| ##/"..tas.registered_commands.record_playback_save_all_alias.." [name] $$- ##record playback, then save TAS + physics + camera when it ends",\n\t\t\t"/"..tas.registered_commands.version.." $$- ##show the loaded TAS client build",\n',
+              'help text')
+          once(
+              '\tfor _,v in pairs(tas.registered_commands) do\n\t\taddCommandHandler(v, tas.commands)\n\tend\n',
+              '\tfor _,v in pairs(tas.registered_commands) do\n\t\tlocal registered = addCommandHandler(v, tas.commands)\n\t\tif not registered then\n\t\t\toutputDebugString("[TAS] addCommandHandler failed for: "..tostring(v), 1)\n\t\tend\n\tend\n',
+              'registration diagnostics')
+          p.write_bytes(text.replace('\n',nl).encode())
+          PY
+      - name: Validate
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lua5.1
+          luac5.1 -p new/tas/client.lua
+          grep -q 'record_playback_save_all_alias = "rpsaveall"' new/tas/client.lua
+          grep -q 'version = "tasversion"' new/tas/client.lua
+          grep -q '2026-09-06-rpsaveall-v2' new/tas/client.lua
+      - name: Commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add new/tas/client.lua
+          git commit -m "fix: make playback-save-all registration diagnosable"
+          git push origin master
