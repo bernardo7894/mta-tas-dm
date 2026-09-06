@@ -229,6 +229,9 @@ local tas = {
 	},
 	timers = {}, -- warp, resume, rewind, warning timers
 }
+
+-- Build marker for diagnosing whether the live client has the latest resource.
+tas.build = "2026-09-06-rpsaveall-v2"
 			
 -- // Registered commands (edit to your liking)
 tas.registered_commands = {	
@@ -249,6 +252,8 @@ tas.registered_commands = {
 	save_all = "saveall",
 	record_playback = "recordplayback",
 	record_playback_save_all = "recordplaybacksaveall",
+	record_playback_save_all_alias = "rpsaveall",
+	version = "tasversion",
 	resume = "resume",
 	seek = "seek",
 	debug = "debugr",
@@ -947,7 +952,10 @@ function tas.init()
 	
 	tas.registered_commands.tas = "tas" -- tasception
 	for _,v in pairs(tas.registered_commands) do
-		addCommandHandler(v, tas.commands)
+		local registered = addCommandHandler(v, tas.commands)
+		if not registered then
+			outputDebugString("[TAS] addCommandHandler failed for: "..tostring(v), 1)
+		end
 	end
 	
 	-- // Fix for different keyboard layouts and multiple bound controls
@@ -1215,10 +1223,14 @@ function tas.commands(cmd, ...)
 			tas.prompt("Playbacking started!", 100, 100, 255)
 		end
 	
-	-- // Record a playback with fresh telemetry; optionally save all outputs at normal completion
-	elseif cmd == tas.registered_commands.record_playback or cmd == tas.registered_commands.record_playback_save_all then
+	-- // Report the exact client build so updater/deployment problems are visible in-game.
+	elseif cmd == tas.registered_commands.version then
+		tas.prompt("TAS build: $$"..tostring(tas.build).."##", 100, 255, 100)
 
-		local save_all_on_finish = cmd == tas.registered_commands.record_playback_save_all
+	-- // Record a playback with fresh telemetry; optionally save all outputs at normal completion
+	elseif cmd == tas.registered_commands.record_playback or cmd == tas.registered_commands.record_playback_save_all or cmd == tas.registered_commands.record_playback_save_all_alias then
+
+		local save_all_on_finish = cmd == tas.registered_commands.record_playback_save_all or cmd == tas.registered_commands.record_playback_save_all_alias
 
 		if tas.var.playback_recording then
 			tas.finish_playback_recording(false)
@@ -1226,7 +1238,7 @@ function tas.commands(cmd, ...)
 		end
 		if args[1] == nil then
 			tas.prompt("Record playback failed, please specify an $$output name##.", 255, 100, 100)
-			local example_command = save_all_on_finish and tas.registered_commands.record_playback_save_all or tas.registered_commands.record_playback
+			local example_command = save_all_on_finish and tas.registered_commands.record_playback_save_all_alias or tas.registered_commands.record_playback
 			tas.prompt("Example: $$/"..example_command.." run_ground", 255, 100, 100)
 			return
 		end
@@ -2228,7 +2240,8 @@ function tas.commands(cmd, ...)
 			"/"..tas.registered_commands.save_both.." [name] $$- ##save TAS and physics files (legacy behavior)",
 			"/"..tas.registered_commands.save_all.." [name] $$- ##save TAS, physics and camera files",
 			"/"..tas.registered_commands.record_playback.." [name] $$- ##play back and capture physics + camera telemetry",
-			"/"..tas.registered_commands.record_playback_save_all.." [name] $$- ##record playback, then save TAS + physics + camera when it ends",
+			"/"..tas.registered_commands.record_playback_save_all.." [name] $$| ##/"..tas.registered_commands.record_playback_save_all_alias.." [name] $$- ##record playback, then save TAS + physics + camera when it ends",
+			"/"..tas.registered_commands.version.." $$- ##show the loaded TAS client build",
 			"/"..tas.registered_commands.autotas.." $$- ##toggle automatic record/playback",
 			"/"..tas.registered_commands.clear_all.." $$- ##clear all cached data",
 			"/"..tas.registered_commands.debug.." [0-3] $$- ##toggle debugging",
