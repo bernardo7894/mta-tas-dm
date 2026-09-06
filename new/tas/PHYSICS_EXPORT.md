@@ -10,6 +10,7 @@ Commands:
 - `/saveboth <name>` remains backward-compatible and saves only `<name>.tas` + `<name>.physics.jsonl`.
 - `/saveall <name>` saves the TAS, physics, and camera files.
 - `/recordplayback <name>` refreshes both `<name>.physics.jsonl` and `<name>.camera.jsonl` from the replayed source frames.
+- `/recordplaybacksaveall <name>` does the same capture and, after a normal end-of-TAS, runs `/saveall <name>` so TAS + physics + camera are saved together.
 
 The camera stream is not embedded in `.physics.jsonl`, and the legacy `.tas` serialization is unchanged.
 

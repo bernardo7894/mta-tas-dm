@@ -20,6 +20,7 @@ local tas = {
 		playback_recording_interpolation = nil, -- restore the user's playbackInterpolation setting after capture
 		playback_recording_capture_all_frames = false, -- fresh captures visit every source TAS frame
 		playback_recording_last_tick = nil, -- wall-clock fallback for playback capture dt on onClientRender
+		playback_recording_save_all = false, -- /recordplaybacksaveall saves TAS + physics + camera after normal completion
 		physics_raw_steer_angle = 0, -- derived steering estimate; never treated as GTA internal state
 		physics_steer_last_tick = nil,
 		physics_steer_initialized = false,
@@ -247,6 +248,7 @@ tas.registered_commands = {
 	save_both = "saveboth",
 	save_all = "saveall",
 	record_playback = "recordplayback",
+	record_playback_save_all = "recordplaybacksaveall",
 	resume = "resume",
 	seek = "seek",
 	debug = "debugr",
@@ -823,8 +825,9 @@ addEventHandler("tas:automationAbort", root, function(id, message)
 end)
 
 -- // Playback ground-contact capture
-function tas.begin_playback_recording(name, vehicle, fresh_playback)
+function tas.begin_playback_recording(name, vehicle, fresh_playback, save_all_on_finish)
 	tas.var.playback_recording = true
+	tas.var.playback_recording_save_all = save_all_on_finish == true
 	tas.var.playback_record_name = name
 	tas.var.playback_recording_interpolation = tas.settings.playbackInterpolation
 	tas.var.playback_recording_capture_all_frames = fresh_playback == true
@@ -899,8 +902,10 @@ function tas.finish_playback_recording(completed)
 	if not tas.var.playback_recording then return end
 
 	local name = tas.var.playback_record_name
+	local save_all_on_finish = tas.var.playback_recording_save_all == true
 	tas.var.playback_recording = false
 	tas.var.playback_record_name = nil
+	tas.var.playback_recording_save_all = false
 	tas.var.playback_recording_capture_all_frames = false
 	tas.var.playback_recording_last_tick = nil
 	if tas.var.playback_recording_interpolation ~= nil then
@@ -914,8 +919,12 @@ function tas.finish_playback_recording(completed)
 	tas.analysis.playback_metadata = nil
 
 	if name then
-		executeCommandHandler(tas.registered_commands.save_analysis, name)
-		executeCommandHandler(tas.registered_commands.save_camera, name)
+		if completed ~= false and save_all_on_finish then
+			executeCommandHandler(tas.registered_commands.save_all, name)
+		else
+			executeCommandHandler(tas.registered_commands.save_analysis, name)
+			executeCommandHandler(tas.registered_commands.save_camera, name)
+		end
 	end
 	tas.analysis.export_frame_limit = nil
 
@@ -1206,8 +1215,10 @@ function tas.commands(cmd, ...)
 			tas.prompt("Playbacking started!", 100, 100, 255)
 		end
 	
-	-- // Record a playback with fresh ground-contact probes
-	elseif cmd == tas.registered_commands.record_playback then
+	-- // Record a playback with fresh telemetry; optionally save all outputs at normal completion
+	elseif cmd == tas.registered_commands.record_playback or cmd == tas.registered_commands.record_playback_save_all then
+
+		local save_all_on_finish = cmd == tas.registered_commands.record_playback_save_all
 
 		if tas.var.playback_recording then
 			tas.finish_playback_recording(false)
@@ -1215,7 +1226,8 @@ function tas.commands(cmd, ...)
 		end
 		if args[1] == nil then
 			tas.prompt("Record playback failed, please specify an $$output name##.", 255, 100, 100)
-			tas.prompt("Example: $$/"..tas.registered_commands.record_playback.." run_ground", 255, 100, 100)
+			local example_command = save_all_on_finish and tas.registered_commands.record_playback_save_all or tas.registered_commands.record_playback
+			tas.prompt("Example: $$/"..example_command.." run_ground", 255, 100, 100)
 			return
 		end
 		if not vehicle then tas.prompt("Record playback failed, get a $$vehicle ##first!", 255, 100, 100) return end
@@ -1226,7 +1238,7 @@ function tas.commands(cmd, ...)
 			fresh_playback = tas.var.playbacking == true
 		end
 		if tas.var.playbacking then
-			tas.begin_playback_recording(args[1], vehicle, fresh_playback)
+			tas.begin_playback_recording(args[1], vehicle, fresh_playback, save_all_on_finish)
 		else
 			tas.prompt("Record playback failed, playback could not be started.", 255, 100, 100)
 		end
@@ -2215,7 +2227,8 @@ function tas.commands(cmd, ...)
 			"/"..tas.registered_commands.save_camera.." [name] $$- ##export synchronized camera telemetry (JSONL)",
 			"/"..tas.registered_commands.save_both.." [name] $$- ##save TAS and physics files (legacy behavior)",
 			"/"..tas.registered_commands.save_all.." [name] $$- ##save TAS, physics and camera files",
-			"/"..tas.registered_commands.record_playback.." [name] $$- ##play back and capture ground-contact telemetry",
+			"/"..tas.registered_commands.record_playback.." [name] $$- ##play back and capture physics + camera telemetry",
+			"/"..tas.registered_commands.record_playback_save_all.." [name] $$- ##record playback, then save TAS + physics + camera when it ends",
 			"/"..tas.registered_commands.autotas.." $$- ##toggle automatic record/playback",
 			"/"..tas.registered_commands.clear_all.." $$- ##clear all cached data",
 			"/"..tas.registered_commands.debug.." [0-3] $$- ##toggle debugging",
